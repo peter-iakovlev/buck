@@ -177,7 +177,12 @@ public class MultiarchFileInfos {
               cxxBuckConfig.shouldCacheLinks(),
               BuildTargetPaths.getGenPath(
                   projectFilesystem, buildTarget, multiarchOutputPathFormat));
-      graphBuilder.addToIndex(multiarchFile);
+      Optional<BuildRule> existingRule2 = graphBuilder.getRuleOptional(multiarchFile.getBuildTarget());
+      if (existingRule2.isPresent()) {
+        return existingRule2.get();
+      } else {
+        graphBuilder.addToIndex(multiarchFile);
+      }
       return multiarchFile;
     } else {
       return new NoopBuildRule(buildTarget, projectFilesystem);
