@@ -511,7 +511,7 @@ public class AppleBundle extends AbstractBuildRuleWithDeclaredAndExtraDeps
       }
     }
 
-    if (needCodeSign()) {
+    if (needCodeSign() && false) {
       Optional<Path> signingEntitlementsTempPath;
       Supplier<CodeSignIdentity> codeSignIdentitySupplier;
 
