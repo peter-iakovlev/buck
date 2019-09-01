@@ -822,6 +822,7 @@ public class ProjectGenerator {
             Optional.of(xcodeDescriptions.getXCodeDescriptions()));
     if (bundleRequiresRemovalOfAllTransitiveFrameworks(targetNode)) {
       copiedRules = rulesWithoutFrameworkBundles(copiedRules);
+      copiedRules = rulesWithoutDylibs(copiedRules);
     } else if (bundleRequiresAllTransitiveFrameworks(binaryNode, bundleLoaderNode)) {
       copiedRules =
           ImmutableSet.<TargetNode<?>>builder()
@@ -947,6 +948,22 @@ public class ProjectGenerator {
             input ->
                 TargetNodes.castArg(input, AppleBundleDescriptionArg.class)
                     .map(argTargetNode -> !isFrameworkBundle(argTargetNode.getConstructorArg()))
+                    .orElse(true))
+        .toImmutableList();
+  }
+
+  private ImmutableList<TargetNode<?>> rulesWithoutDylibs(
+      Iterable<TargetNode<?>> copiedRules) {
+    return RichStream.from(copiedRules)
+        .filter(
+            input ->
+                TargetNodes.castArg(input, AppleLibraryDescriptionArg.class)
+                    .map(argTargetNode -> {
+                      if (argTargetNode.getBuildTarget().getFlavors().contains(CxxDescriptionEnhancer.SHARED_FLAVOR)) {
+                        return false;
+                      }
+                      return true;
+                    })
                     .orElse(true))
         .toImmutableList();
   }
@@ -2309,8 +2326,9 @@ public class ProjectGenerator {
                     .transform(
                         bundleExtension -> {
                           switch (bundleExtension) {
-                            case APP:
                             case APPEX:
+                              return false;
+                            case APP:
                             case PLUGIN:
                             case BUNDLE:
                             case XCTEST:
@@ -3416,7 +3434,7 @@ public class ProjectGenerator {
 
       PBXFileReference fileReference = getLibraryFileReference(targetNode);
       PBXBuildFile buildFile = new PBXBuildFile(fileReference);
-      if (fileReference.getExplicitFileType().equals(Optional.of("wrapper.framework"))) {
+      if (fileReference.getExplicitFileType().equals(Optional.of("wrapper.framework")) || fileReference.getExplicitFileType().equals(Optional.of("compiled.mach-o.dylib"))) {
         UnflavoredBuildTargetView buildTarget =
             targetNode.getBuildTarget().getUnflavoredBuildTarget();
         if (frameworkTargets.contains(buildTarget)) {
@@ -4656,6 +4674,9 @@ public class ProjectGenerator {
 
   private static boolean bundleRequiresRemovalOfAllTransitiveFrameworks(
       TargetNode<? extends HasAppleBundleFields> targetNode) {
+    if (targetNode.getConstructorArg().getXcodeProductType().equals(Optional.of("com.apple.product-type.app-extension"))) {
+      return true;
+    }
     return isFrameworkBundle(targetNode.getConstructorArg());
   }
 
