@@ -47,6 +47,7 @@ import com.facebook.buck.jvm.java.DefaultJavaPackageFinder;
 import com.facebook.buck.jvm.java.GenerateCodeCoverageReportStep;
 import com.facebook.buck.jvm.java.JacocoConstants;
 import com.facebook.buck.jvm.java.JavaBuckConfig;
+import com.facebook.buck.jvm.java.JavaLibraryClasspathProvider;
 import com.facebook.buck.jvm.java.JavaLibraryWithTests;
 import com.facebook.buck.jvm.java.JavaOptions;
 import com.facebook.buck.jvm.java.JavaTest;
@@ -151,7 +152,7 @@ public class TestRunning {
                       buildContext.getBuildCellRootPath(),
                       library.getProjectFilesystem(),
                       JacocoConstants.getJacocoOutputDir(library.getProjectFilesystem())))) {
-            StepRunner.runStep(executionContext, step);
+            StepRunner.runStep(executionContext, step, Optional.empty());
           }
         } catch (StepFailedException e) {
           params
@@ -433,7 +434,8 @@ public class TestRunning {
                         .getSpoolMode()
                     == JavacOptions.SpoolMode.INTERMEDIATE_TO_DISK,
                 options.getCoverageIncludes(),
-                options.getCoverageExcludes()));
+                options.getCoverageExcludes()),
+            Optional.empty());
       } catch (StepFailedException e) {
         params
             .getBuckEventBus()
@@ -567,7 +569,8 @@ public class TestRunning {
         JavaTest javaTest = (JavaTest) test;
 
         ImmutableSet<JavaLibrary> transitiveDeps =
-            javaTest.getCompiledTestsLibrary().getTransitiveClasspathDeps();
+            JavaLibraryClasspathProvider.getAllReachableJavaLibraries(
+                ImmutableSet.of(javaTest.getCompiledTestsLibrary()));
         for (JavaLibrary dep : transitiveDeps) {
           if (dep instanceof JavaLibraryWithTests) {
             ImmutableSortedSet<BuildTarget> depTests = ((JavaLibraryWithTests) dep).getTests();
@@ -839,7 +842,7 @@ public class TestRunning {
           LOG.debug("Test steps will run for %s", buildTarget);
           eventBus.post(TestRuleEvent.started(buildTarget));
           for (Step step : steps) {
-            StepRunner.runStep(context, step);
+            StepRunner.runStep(context, step, Optional.of(buildTarget));
           }
           LOG.debug("Test steps did run for %s", buildTarget);
           eventBus.post(TestRuleEvent.finished(buildTarget));

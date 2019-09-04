@@ -18,7 +18,6 @@ package com.facebook.buck.features.apple.projectV2;
 
 import com.facebook.buck.apple.AppleBuildRules;
 import com.facebook.buck.apple.AppleBuildRules.RecursiveDependenciesMode;
-import com.facebook.buck.apple.AppleBundleDescription;
 import com.facebook.buck.apple.AppleBundleDescriptionArg;
 import com.facebook.buck.apple.AppleConfig;
 import com.facebook.buck.apple.AppleDependenciesCache;
@@ -53,7 +52,6 @@ import com.facebook.buck.swift.SwiftBuckConfig;
 import com.facebook.buck.util.RichStream;
 import com.facebook.buck.util.json.ObjectMappers;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Throwables;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
@@ -388,62 +386,39 @@ public class WorkspaceAndProjectGenerator {
       ImmutableMap.Builder<BuildTarget, PBXTarget> buildTargetToPbxTargetMapBuilder,
       ImmutableMap.Builder<PBXTarget, Path> targetToProjectPathMapBuilder)
       throws IOException, InterruptedException {
-    ImmutableMultimap.Builder<Cell, BuildTarget> projectCellToBuildTargetsBuilder =
+
+    ImmutableMultimap.Builder<Path, BuildTarget> projectPathToBuildTargetsBuilder =
         ImmutableMultimap.builder();
     for (TargetNode<?> targetNode : projectGraph.getNodes()) {
       BuildTarget buildTarget = targetNode.getBuildTarget();
-      projectCellToBuildTargetsBuilder.put(rootCell.getCell(buildTarget), buildTarget);
+      if (focusedTargetMatcher.matches(targetNode.getBuildTarget())) {
+        projectPathToBuildTargetsBuilder.put(buildTarget.getBasePath(), buildTarget);
+      }
     }
-    ImmutableMultimap<Cell, BuildTarget> projectCellToBuildTargets =
-        projectCellToBuildTargetsBuilder.build();
-    List<ListenableFuture<GenerationResult>> projectGeneratorFutures = new ArrayList<>();
-    for (Cell projectCell : projectCellToBuildTargets.keySet()) {
-      ImmutableMultimap.Builder<Path, BuildTarget> projectDirectoryToBuildTargetsBuilder =
-          ImmutableMultimap.builder();
-      ImmutableSet<BuildTarget> cellRules =
-          ImmutableSet.copyOf(projectCellToBuildTargets.get(projectCell));
-      for (BuildTarget buildTarget : cellRules) {
-        projectDirectoryToBuildTargetsBuilder.put(buildTarget.getBasePath(), buildTarget);
-      }
-      ImmutableMultimap<Path, BuildTarget> projectDirectoryToBuildTargets =
-          projectDirectoryToBuildTargetsBuilder.build();
-      Path relativeTargetCell = rootCell.getRoot().relativize(projectCell.getRoot());
-      for (Path projectDirectory : projectDirectoryToBuildTargets.keySet()) {
-        ImmutableSet<BuildTarget> rules =
-            filterRulesForProjectDirectory(
-                projectGraph,
-                ImmutableSet.copyOf(projectDirectoryToBuildTargets.get(projectDirectory)));
-        if (Sets.intersection(targetsInRequiredProjects, rules).isEmpty()) {
-          continue;
-        }
 
-        boolean isMainProject =
-            workspaceArguments.getSrcTarget().isPresent()
-                && rules.contains(workspaceArguments.getSrcTarget().get());
-        projectGeneratorFutures.add(
-            listeningExecutorService.submit(
-                () -> {
-                  GenerationResult result =
-                      generateProjectForDirectory(
-                          projectGenerators,
-                          projectCell,
-                          projectDirectory,
-                          rules,
-                          isMainProject,
-                          targetsInRequiredProjects);
-                  // convert the projectPath to relative to the target cell here
-                  result =
-                      GenerationResult.of(
-                          relativeTargetCell.resolve(result.getProjectPath()),
-                          result.isProjectGenerated(),
-                          result.getRequiredBuildTargets(),
-                          result.getXcconfigPaths(),
-                          result.getFilesToCopyInXcode(),
-                          result.getBuildTargetToGeneratedTargetMap(),
-                          result.getGeneratedProjectToPbxTargets());
-                  return result;
-                }));
+    ImmutableMultimap<Path, BuildTarget> projectPathToBuildTargets =
+        projectPathToBuildTargetsBuilder.build();
+    List<ListenableFuture<GenerationResult>> projectGeneratorFutures = new ArrayList<>();
+    for (Path projectPath : projectPathToBuildTargets.keySet()) {
+      ImmutableSet<BuildTarget> buildTargets =
+          ImmutableSet.copyOf(projectPathToBuildTargets.get(projectPath));
+      if (Sets.intersection(targetsInRequiredProjects, buildTargets).isEmpty()) {
+        continue;
       }
+
+      boolean isMainProject =
+          workspaceArguments.getSrcTarget().isPresent()
+              && buildTargets.contains(workspaceArguments.getSrcTarget().get());
+      projectGeneratorFutures.add(
+          listeningExecutorService.submit(
+              () ->
+                  generateProjectForDirectory(
+                      projectGenerators,
+                      rootCell,
+                      projectPath,
+                      buildTargets,
+                      isMainProject,
+                      targetsInRequiredProjects)));
     }
 
     List<GenerationResult> generationResults;
@@ -458,7 +433,7 @@ public class WorkspaceAndProjectGenerator {
       if (!result.isProjectGenerated()) {
         continue;
       }
-      workspaceGenerator.addFilePath(result.getProjectPath());
+      workspaceGenerator.addFilePath(result.getProjectPath(), Optional.empty());
       processGenerationResult(
           generatedProjectToPbxTargetsBuilder,
           buildTargetToPbxTargetMapBuilder,
@@ -530,7 +505,6 @@ public class WorkspaceAndProjectGenerator {
                 isMainProject,
                 workspaceArguments.getSrcTarget(),
                 targetsInRequiredProjects,
-                focusedTargetMatcher,
                 defaultCxxPlatform,
                 appleCxxFlavors,
                 graphBuilderForNode,
@@ -788,46 +762,6 @@ public class WorkspaceAndProjectGenerator {
           schemeNameToSrcTargetNodeBuilder,
           extraTestNodesBuilder);
     }
-  }
-
-  private static ImmutableSet<BuildTarget> filterRulesForProjectDirectory(
-      TargetGraph projectGraph, ImmutableSet<BuildTarget> projectBuildTargets) {
-    // ProjectGenerator implicitly generates targets for all apple_binary rules which
-    // are referred to by apple_bundle rules' 'binary' field.
-    //
-    // We used to support an explicit xcode_project_config() which
-    // listed all dependencies explicitly, but now that we synthesize
-    // one, we need to ensure we continue to only pass apple_binary
-    // targets which do not belong to apple_bundle rules.
-    ImmutableSet.Builder<BuildTarget> binaryTargetsInsideBundlesBuilder = ImmutableSet.builder();
-    for (TargetNode<?> projectTargetNode : projectGraph.getAll(projectBuildTargets)) {
-      if (projectTargetNode.getDescription() instanceof AppleBundleDescription) {
-        AppleBundleDescriptionArg appleBundleDescriptionArg =
-            (AppleBundleDescriptionArg) projectTargetNode.getConstructorArg();
-        // We don't support apple_bundle rules referring to apple_binary rules
-        // outside their current directory.
-        BuildTarget binaryTarget =
-            appleBundleDescriptionArg
-                .getBinary()
-                .orElseThrow(
-                    () ->
-                        new HumanReadableException(
-                            "apple_bundle rules without binary attribute are not supported."));
-        Preconditions.checkState(
-            binaryTarget.getBasePath().equals(projectTargetNode.getBuildTarget().getBasePath()),
-            "apple_bundle target %s contains reference to binary %s outside base path %s",
-            projectTargetNode.getBuildTarget(),
-            appleBundleDescriptionArg.getBinary(),
-            projectTargetNode.getBuildTarget().getBasePath());
-        binaryTargetsInsideBundlesBuilder.add(binaryTarget);
-      }
-    }
-    ImmutableSet<BuildTarget> binaryTargetsInsideBundles =
-        binaryTargetsInsideBundlesBuilder.build();
-
-    // Remove all apple_binary targets which are inside bundles from
-    // the rest of the build targets in the project.
-    return ImmutableSet.copyOf(Sets.difference(projectBuildTargets, binaryTargetsInsideBundles));
   }
 
   /**

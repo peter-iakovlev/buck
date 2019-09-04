@@ -40,6 +40,7 @@ import com.dd.plist.NSDictionary;
 import com.dd.plist.NSString;
 import com.facebook.buck.apple.AppleAssetCatalogBuilder;
 import com.facebook.buck.apple.AppleBinaryBuilder;
+import com.facebook.buck.apple.AppleBundle;
 import com.facebook.buck.apple.AppleBundleBuilder;
 import com.facebook.buck.apple.AppleBundleExtension;
 import com.facebook.buck.apple.AppleConfig;
@@ -69,6 +70,7 @@ import com.facebook.buck.apple.xcode.xcodeproj.ProductType;
 import com.facebook.buck.apple.xcode.xcodeproj.ProductTypes;
 import com.facebook.buck.apple.xcode.xcodeproj.SourceTreePath;
 import com.facebook.buck.apple.xcode.xcodeproj.XCBuildConfiguration;
+import com.facebook.buck.apple.xcode.xcodeproj.XCVersionGroup;
 import com.facebook.buck.core.cell.Cell;
 import com.facebook.buck.core.cell.TestCellBuilder;
 import com.facebook.buck.core.config.BuckConfig;
@@ -82,6 +84,8 @@ import com.facebook.buck.core.model.UserFlavor;
 import com.facebook.buck.core.model.targetgraph.TargetGraph;
 import com.facebook.buck.core.model.targetgraph.TargetGraphFactory;
 import com.facebook.buck.core.model.targetgraph.TargetNode;
+import com.facebook.buck.core.parser.buildtargetpattern.BuildTargetPattern;
+import com.facebook.buck.core.parser.buildtargetpattern.BuildTargetPatternParser;
 import com.facebook.buck.core.plugin.impl.BuckPluginManagerFactory;
 import com.facebook.buck.core.rules.ActionGraphBuilder;
 import com.facebook.buck.core.rules.BuildRule;
@@ -601,17 +605,10 @@ public class ProjectGeneratorTest {
         Iterables.transform(project.getMainGroup().getChildren(), PBXReference::getName);
     assertThat(childNames, hasItem("Info.plist"));
 
-    PBXGroup otherGroup =
-        project
-            .getMainGroup()
-            .getOrCreateChildGroupByName("Other")
-            .getOrCreateChildGroupByName("..");
-    assertThat(otherGroup.getChildren(), hasSize(2));
-    childNames = Iterables.transform(otherGroup.getChildren(), PBXReference::getName);
+    childNames = Iterables.transform(project.getMainGroup().getChildren(), PBXReference::getName);
     assertThat(childNames, hasItem("bar.json"));
 
-    PBXGroup otherFooGroup = otherGroup.getOrCreateChildGroupByName("foo");
-    assertThat(otherFooGroup.getChildren(), hasSize(1));
+    PBXGroup otherFooGroup = project.getMainGroup().getOrCreateChildGroupByName("foo");
     childNames = Iterables.transform(otherFooGroup.getChildren(), PBXReference::getName);
     assertThat(childNames, hasItem("foo.json"));
   }
@@ -3392,7 +3389,7 @@ public class ProjectGeneratorTest {
     assertThat(target.getProductType(), equalTo(ProductTypes.STATIC_LIBRARY));
 
     assertHasConfigurations(target, "Debug");
-    assertKeepsConfigurationsInMainGroup(projectGenerator.getGeneratedProject(), target);
+    assertKeepsConfigurationsInGenGroup(projectGenerator.getGeneratedProject(), target);
     XCBuildConfiguration configuration =
         target.getBuildConfigurationList().getBuildConfigurationsByName().asMap().get("Debug");
     assertEquals(configuration.getBuildSettings().count(), 0);
@@ -3918,23 +3915,125 @@ public class ProjectGeneratorTest {
   }
 
   @Test
-  public void testCoreDataModelRuleAddsReference() throws IOException {
+  public void testUnversionedCoreDataModelCreatesFileReference() throws IOException {
     BuildTarget modelTarget = BuildTargetFactory.newInstance(rootPath, "//foo", "model");
     TargetNode<?> modelNode =
         CoreDataModelBuilder.createBuilder(modelTarget)
-            .setPath(FakeSourcePath.of("foo.xcdatamodel").getRelativePath())
+            .setPath(FakeSourcePath.of("foo/models/foo.xcdatamodel").getRelativePath())
             .build();
-    testRuleAddsReference(modelTarget, modelNode, "foo.xcdatamodel");
+    BuildTarget fooLibraryTarget = BuildTargetFactory.newInstance(rootPath, "//foo", "lib");
+    TargetNode<?> fooLibraryNode =
+        AppleLibraryBuilder.createBuilder(fooLibraryTarget)
+            .setDeps(ImmutableSortedSet.of(modelTarget))
+            .build();
+    BuildTarget bundleTarget = BuildTargetFactory.newInstance(rootPath, "//foo", "bundle");
+    TargetNode<?> bundleNode =
+        AppleBundleBuilder.createBuilder(bundleTarget)
+            .setExtension(Either.ofLeft(AppleBundleExtension.BUNDLE))
+            .setInfoPlist(FakeSourcePath.of("Info.plist"))
+            .setBinary(fooLibraryTarget)
+            .build();
+
+    ProjectGenerator projectGenerator =
+        createProjectGenerator(ImmutableSet.of(fooLibraryNode, bundleNode, modelNode));
+    projectGenerator.createXcodeProjects();
+
+    PBXProject project = projectGenerator.getGeneratedProject();
+    PBXGroup modelGroup =
+        PBXTestUtils.assertHasSubgroupPathAndReturnLast(
+            project.getMainGroup(), ImmutableList.of("foo", "models"));
+    PBXTestUtils.assertHasFileReferenceWithNameAndReturnIt(modelGroup, "foo.xcdatamodel");
+  }
+
+  @Test
+  public void testVersionedCoreDataModelCreatesGroupWithCurrentVersionSpecified()
+      throws IOException {
+    BuildTarget modelTarget = BuildTargetFactory.newInstance(rootPath, "//foo", "model");
+    Path dataModelRootPath = Paths.get("foo/models/foo.xcdatamodeld");
+    TargetNode<?> modelNode =
+        CoreDataModelBuilder.createBuilder(modelTarget)
+            .setPath(FakeSourcePath.of(dataModelRootPath).getRelativePath())
+            .build();
+    BuildTarget fooLibraryTarget = BuildTargetFactory.newInstance(rootPath, "//foo", "lib");
+    TargetNode<?> fooLibraryNode =
+        AppleLibraryBuilder.createBuilder(fooLibraryTarget)
+            .setDeps(ImmutableSortedSet.of(modelTarget))
+            .build();
+    BuildTarget bundleTarget = BuildTargetFactory.newInstance(rootPath, "//foo", "bundle");
+    TargetNode<?> bundleNode =
+        AppleBundleBuilder.createBuilder(bundleTarget)
+            .setExtension(Either.ofLeft(AppleBundleExtension.BUNDLE))
+            .setInfoPlist(FakeSourcePath.of("Info.plist"))
+            .setBinary(fooLibraryTarget)
+            .build();
+
+    Path currentVersionPath = dataModelRootPath.resolve(".xccurrentversion");
+    fakeProjectFilesystem.writeContentsToPath(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+            + "<plist version=\"1.0\">\n"
+            + "<dict>\n"
+            + "\t<key>_XCCurrentVersionName</key>\n"
+            + "\t<string>foov1.1.0.xcdatamodel</string>\n"
+            + "</dict>\n"
+            + "</plist>",
+        currentVersionPath);
+
+    String currentVersionFileName = "foov1.1.0.xcdatamodel";
+    Path versionFilePath = dataModelRootPath.resolve(currentVersionFileName);
+    fakeProjectFilesystem.mkdirs(versionFilePath);
+    fakeProjectFilesystem.writeContentsToPath("", versionFilePath.resolve("contents"));
+
+    ProjectGenerator projectGenerator =
+        createProjectGenerator(ImmutableSet.of(fooLibraryNode, bundleNode, modelNode));
+    projectGenerator.createXcodeProjects();
+
+    PBXProject project = projectGenerator.getGeneratedProject();
+    PBXGroup modelGroup =
+        PBXTestUtils.assertHasSubgroupPathAndReturnLast(
+            project.getMainGroup(), ImmutableList.of("foo", "models"));
+    Optional<XCVersionGroup> versionGroup =
+        modelGroup.getChildren().stream()
+            .filter(input -> input.getName().equals("foo.xcdatamodeld"))
+            .filter(input -> input.getClass() == XCVersionGroup.class)
+            .map(input -> (XCVersionGroup) input)
+            .findFirst();
+    assert (versionGroup.isPresent());
+
+    assertEquals(versionGroup.get().getCurrentVersion().getName(), currentVersionFileName);
+    Optional<PBXFileReference> currentCoreDataFileReference =
+        versionGroup.get().getChildren().stream()
+            .filter(input -> input.getName().equals(currentVersionFileName))
+            .findFirst();
+    assertTrue(currentCoreDataFileReference.isPresent());
   }
 
   @Test
   public void testSceneKitAssetsRuleAddsReference() throws IOException {
-    BuildTarget target = BuildTargetFactory.newInstance(rootPath, "//foo", "scenekitasset");
-    TargetNode<?> node =
-        SceneKitAssetsBuilder.createBuilder(target)
+    BuildTarget sceneKitTarget = BuildTargetFactory.newInstance(rootPath, "//foo", "scenekitasset");
+    TargetNode<?> sceneKitNode =
+        SceneKitAssetsBuilder.createBuilder(sceneKitTarget)
             .setPath(FakeSourcePath.of("foo.scnassets").getRelativePath())
             .build();
-    testRuleAddsReference(target, node, "foo.scnassets");
+    BuildTarget fooLibraryTarget = BuildTargetFactory.newInstance(rootPath, "//foo", "lib");
+    TargetNode<?> fooLibraryNode =
+        AppleLibraryBuilder.createBuilder(fooLibraryTarget)
+            .setDeps(ImmutableSortedSet.of(sceneKitTarget))
+            .build();
+    BuildTarget bundleTarget = BuildTargetFactory.newInstance(rootPath, "//foo", "bundle");
+    TargetNode<?> bundleNode =
+        AppleBundleBuilder.createBuilder(bundleTarget)
+            .setExtension(Either.ofLeft(AppleBundleExtension.BUNDLE))
+            .setInfoPlist(FakeSourcePath.of("Info.plist"))
+            .setBinary(fooLibraryTarget)
+            .build();
+
+    ProjectGenerator generator =
+        createProjectGenerator(ImmutableList.of(bundleNode, fooLibraryNode, sceneKitNode));
+    generator.createXcodeProjects();
+
+    PBXProject project = generator.getGeneratedProject();
+    PBXTestUtils.assertHasFileReferenceWithNameAndReturnIt(project.getMainGroup(), "foo.scnassets");
   }
 
   @Test
@@ -5323,7 +5422,6 @@ public class ProjectGeneratorTest {
             false, /* isMainProject */
             Optional.of(lib1Target),
             ImmutableSet.of(lib1Target, lib4Target),
-            FocusedTargetMatcher.noFocus(),
             DEFAULT_PLATFORM,
             ImmutableSet.of(),
             getActionGraphBuilderNodeFunction(targetGraph),
@@ -5369,7 +5467,6 @@ public class ProjectGeneratorTest {
             true, /* isMainProject */
             Optional.of(lib1Target),
             ImmutableSet.of(lib1Target, lib4Target),
-            FocusedTargetMatcher.noFocus(),
             DEFAULT_PLATFORM,
             ImmutableSet.of(),
             getActionGraphBuilderNodeFunction(targetGraph),
@@ -5494,7 +5591,6 @@ public class ProjectGeneratorTest {
             false, /* isMainProject */
             Optional.of(lib1Target),
             ImmutableSet.of(lib1Target, lib4Target),
-            FocusedTargetMatcher.noFocus(),
             DEFAULT_PLATFORM,
             ImmutableSet.of(),
             getActionGraphBuilderNodeFunction(targetGraph),
@@ -5548,7 +5644,6 @@ public class ProjectGeneratorTest {
             true, /* isMainProject */
             Optional.of(lib1Target),
             ImmutableSet.of(lib1Target, lib4Target),
-            FocusedTargetMatcher.noFocus(),
             DEFAULT_PLATFORM,
             ImmutableSet.of(),
             getActionGraphBuilderNodeFunction(targetGraph),
@@ -5615,6 +5710,35 @@ public class ProjectGeneratorTest {
                 .normalize()
                 .toString(),
         buildSettingsTest.get("HEADER_SEARCH_PATHS"));
+  }
+
+  @Test
+  public void testEntitlementsPlistAddedToPath() throws IOException {
+    BuildTarget binaryTarget = BuildTargetFactory.newInstance(rootPath, "//foo", "bin");
+    BuildTarget bundleTarget = BuildTargetFactory.newInstance(rootPath, "//foo", "bundle");
+
+    TargetNode<?> binaryNode = AppleBinaryBuilder.createBuilder(binaryTarget).build();
+    TargetNode<?> bundleNode =
+        AppleBundleBuilder.createBuilder(bundleTarget)
+            .setBinary(binaryTarget)
+            .setInfoPlist(FakeSourcePath.of(("Info.plist")))
+            .setInfoPlistSubstitutions(
+                ImmutableMap.of(
+                    AppleBundle.CODE_SIGN_ENTITLEMENTS,
+                    "$(SOURCE_ROOT)/Support/Entitlements/My-Entitlements.plist"))
+            .setExtension(Either.ofLeft(AppleBundleExtension.APP))
+            .build();
+
+    ProjectGenerator projectGenerator =
+        createProjectGenerator(ImmutableSet.of(binaryNode, bundleNode));
+    projectGenerator.createXcodeProjects();
+
+    PBXProject generatedProject = projectGenerator.getGeneratedProject();
+    PBXGroup entitlementsGroup =
+        PBXTestUtils.assertHasSubgroupPathAndReturnLast(
+            generatedProject.getMainGroup(), ImmutableList.of("foo", "Support", "Entitlements"));
+    PBXTestUtils.assertHasFileReferenceWithNameAndReturnIt(
+        entitlementsGroup, "My-Entitlements.plist");
   }
 
   private ProjectGenerator createProjectGenerator(
@@ -5757,7 +5881,6 @@ public class ProjectGeneratorTest {
         false,
         workspaceTarget,
         ImmutableSet.of(),
-        FocusedTargetMatcher.noFocus(),
         DEFAULT_PLATFORM,
         appleCxxFlavors,
         actionGraphBuilderForNode,
@@ -5848,17 +5971,22 @@ public class ProjectGeneratorTest {
     }
   }
 
-  private void assertKeepsConfigurationsInMainGroup(PBXProject project, PBXTarget target) {
+  private void assertKeepsConfigurationsInGenGroup(PBXProject project, PBXTarget target) {
     Map<String, XCBuildConfiguration> buildConfigurationMap =
         target.getBuildConfigurationList().getBuildConfigurationsByName().asMap();
 
-    PBXGroup configsGroup =
-        project
-            .getMainGroup()
-            .getOrCreateChildGroupByName("Configurations")
-            .getOrCreateChildGroupByName("Buck (Do Not Modify)");
+    PBXGroup buckOutGroup =
+        PBXTestUtils.assertHasSubgroupAndReturnIt(project.getMainGroup(), "buck-out");
+    PBXGroup genGroup = PBXTestUtils.assertHasSubgroupAndReturnIt(buckOutGroup, "gen");
 
-    assertNotNull("Configuration group exists", configsGroup);
+    BuildTargetPattern buildTargetPattern = BuildTargetPatternParser.parse(target.getName());
+    PBXGroup configsGroup = genGroup;
+    // File should be located in the buck-out/gen/{target-path}, so iterate through the path
+    // components
+    // to find the configs directory.
+    for (Path component : buildTargetPattern.getBasePath()) {
+      configsGroup = PBXTestUtils.assertHasSubgroupAndReturnIt(configsGroup, component.toString());
+    }
 
     List<PBXReference> configReferences = configsGroup.getChildren();
     assertFalse("Configuration file references exist", configReferences.isEmpty());

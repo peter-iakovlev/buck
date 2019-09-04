@@ -41,8 +41,10 @@ import com.facebook.buck.rules.args.StringArg;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.ImmutableSortedSet;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.Optional;
 import java.util.stream.Stream;
 import org.hamcrest.Matchers;
@@ -239,7 +241,11 @@ public class RustCompileTest {
           /* depArgs */ ImmutableList.of(),
           /* linkerFlags */
           ImmutableList.of(),
-          srcs,
+          ImmutableSortedMap.of(),
+          srcs.stream()
+              .collect(
+                  ImmutableSortedMap.toImmutableSortedMap(
+                      Comparator.naturalOrder(), src -> src, src -> Optional.empty())),
           rootModule,
           RustBuckConfig.RemapSrcPaths.NO,
           Optional.empty());
