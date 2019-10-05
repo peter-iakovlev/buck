@@ -992,7 +992,11 @@ public class AppleBundle extends AbstractBuildRuleWithDeclaredAndExtraDeps
     keys.put("DTPlatformName", new NSString(platform.getName()));
     keys.put("DTPlatformVersion", new NSString(sdkVersion));
     keys.put("DTSDKName", new NSString(sdkName + sdkVersion));
-    keys.put("MinimumOSVersion", new NSString(minOSVersion));
+    if (infoPlistSubstitutions.containsKey("MinimumOSVersion")) {
+      keys.put("MinimumOSVersion", new NSString(infoPlistSubstitutions.get("MinimumOSVersion")));
+    } else {
+      keys.put("MinimumOSVersion", new NSString(minOSVersion));
+    }
     if (platformBuildVersion.isPresent()) {
       keys.put("DTPlatformBuild", new NSString(platformBuildVersion.get()));
       keys.put("DTSDKBuild", new NSString(platformBuildVersion.get()));
