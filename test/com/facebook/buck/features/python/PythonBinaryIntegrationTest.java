@@ -163,24 +163,6 @@ public class PythonBinaryIntegrationTest {
   }
 
   @Test
-  public void inplaceBinariesWriteCorrectInterpreter() throws IOException {
-    assumeThat(
-        packageStyle,
-        Matchers.in(ImmutableList.of(PackageStyle.INPLACE, PackageStyle.INPLACE_LITE)));
-
-    String expectedPythonPath =
-        new PythonInterpreterFromConfig(getPythonBuckConfig(), new ExecutableFinder())
-            .getPythonInterpreterPath()
-            .toString();
-
-    Path binPath = workspace.buildAndReturnOutput("//:bin");
-    workspace.runBuckCommand("run", "//:bin").assertSuccess();
-
-    String firstLine = workspace.getProjectFileSystem().readLines(binPath).get(0);
-    assertTrue(firstLine.startsWith(String.format("#!%s", expectedPythonPath)));
-  }
-
-  @Test
   public void commandLineArgs() {
     ProcessResult result = workspace.runBuckCommand("run", ":bin", "HELLO WORLD").assertSuccess();
     assertThat(result.getStdout(), containsString("HELLO WORLD"));
@@ -559,37 +541,5 @@ public class PythonBinaryIntegrationTest {
           ret.getStdout().orElse("") + ret.getStderr().orElse(""), 0, ret.getExitCode());
       assertThat(ret.getStdout().orElse(""), equalTo(test.getSecond()));
     }
-  }
-
-  @Test
-  public void inplaceBinaryUsesInterpreterFlags() throws IOException {
-    assumeThat(
-        packageStyle,
-        Matchers.in(ImmutableList.of(PackageStyle.INPLACE, PackageStyle.INPLACE_LITE)));
-
-    workspace.addBuckConfigLocalOption("python", "inplace_interpreter_flags", "-EsB");
-    workspace.runBuckCommand("run", "//:bin").assertSuccess();
-
-    ImmutableList<Path> pycFiles =
-        Files.find(
-                tmp.getRoot(),
-                Integer.MAX_VALUE,
-                (path, attr) -> path.getFileName().toString().endsWith(".pyc"))
-            .map(path -> tmp.getRoot().relativize(path))
-            .collect(ImmutableList.toImmutableList());
-    Assert.assertEquals(ImmutableList.of(), pycFiles);
-
-    workspace.removeBuckConfigLocalOption("python", "inplace_interpreter_flags");
-    workspace.runBuckCommand("run", "//:bin").assertSuccess();
-
-    // Fall back to using the defaults (-Es), which should write out bytecode
-    pycFiles =
-        Files.find(
-                tmp.getRoot(),
-                Integer.MAX_VALUE,
-                (path, attr) -> path.getFileName().toString().endsWith(".pyc"))
-            .map(path -> tmp.getRoot().relativize(path))
-            .collect(ImmutableList.toImmutableList());
-    Assert.assertEquals(3, pycFiles.size());
   }
 }

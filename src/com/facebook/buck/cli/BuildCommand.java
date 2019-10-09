@@ -21,8 +21,6 @@ import com.facebook.buck.apple.AppleDsym;
 import com.facebook.buck.command.Build;
 import com.facebook.buck.command.LocalBuildExecutor;
 import com.facebook.buck.command.config.BuildBuckConfig;
-import com.facebook.buck.core.build.distributed.synchronization.RemoteBuildRuleCompletionWaiter;
-import com.facebook.buck.core.build.distributed.synchronization.impl.NoOpRemoteBuildRuleCompletionWaiter;
 import com.facebook.buck.core.build.engine.delegate.LocalCachingBuildEngineDelegate;
 import com.facebook.buck.core.build.engine.type.BuildType;
 import com.facebook.buck.core.build.event.BuildEvent;
@@ -186,7 +184,7 @@ public class BuildCommand extends AbstractCommand {
   @Option(name = SHOW_RULEKEY_LONG_ARG, usage = "Print the rulekey for each of the built rules.")
   private boolean showRuleKey;
 
-  @Option(name = LOCAL_BUILD_LONG_ARG, usage = "Disable distributed build.")
+  @Option(name = LOCAL_BUILD_LONG_ARG, usage = "Disable remote execution for this build.")
   private boolean forceDisableRemoteExecution = false;
 
   @Nullable
@@ -253,10 +251,6 @@ public class BuildCommand extends AbstractCommand {
 
   public void setKeepGoing(boolean keepGoing) {
     this.keepGoing = keepGoing;
-  }
-
-  public void forceDisableRemoteExecution() {
-    forceDisableRemoteExecution = true;
   }
 
   public boolean isRemoteExecutionForceDisabled() {
@@ -449,7 +443,6 @@ public class BuildCommand extends AbstractCommand {
                 graphsAndBuildTargets,
                 commandThreadManager.getWeightedListeningExecutorService(),
                 optionalRuleKeyLogger,
-                new NoOpRemoteBuildRuleCompletionWaiter(),
                 false,
                 Optional.empty(),
                 ruleKeyCacheScope,
@@ -714,7 +707,6 @@ public class BuildCommand extends AbstractCommand {
       GraphsAndBuildTargets graphsAndBuildTargets,
       WeightedListeningExecutorService executor,
       Optional<ThriftRuleKeyLogger> ruleKeyLogger,
-      RemoteBuildRuleCompletionWaiter remoteBuildRuleCompletionWaiter,
       boolean isDownloadHeavyBuild,
       Optional<CountDownLatch> initializeBuildLatch,
       RuleKeyCacheScope<RuleKey> ruleKeyCacheScope,
@@ -742,7 +734,6 @@ public class BuildCommand extends AbstractCommand {
             ruleKeyCacheScope,
             getBuildEngineMode(),
             ruleKeyLogger,
-            remoteBuildRuleCompletionWaiter,
             params.getMetadataProvider(),
             params.getUnconfiguredBuildTargetFactory(),
             params.getTargetConfiguration(),
