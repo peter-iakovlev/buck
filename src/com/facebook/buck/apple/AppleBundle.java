@@ -515,7 +515,7 @@ public class AppleBundle extends AbstractBuildRuleWithDeclaredAndExtraDeps
       }
     }
 
-    if (needCodeSign() && false) {
+    if (needCodeSign()) {
       Optional<Path> signingEntitlementsTempPath = Optional.empty();
       Supplier<CodeSignIdentity> codeSignIdentitySupplier;
 
@@ -1189,9 +1189,10 @@ public class AppleBundle extends AbstractBuildRuleWithDeclaredAndExtraDeps
 
   // .framework bundles will be code-signed when they're copied into the containing bundle.
   private boolean needCodeSign() {
-    return binary.isPresent()
+    return false;
+    /*return binary.isPresent()
         && ApplePlatform.needsCodeSign(platform.getName())
-        && !extension.equals(FRAMEWORK_EXTENSION);
+        && !extension.equals(FRAMEWORK_EXTENSION);*/
   }
 
   @Override
