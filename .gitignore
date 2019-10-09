@@ -3,6 +3,7 @@
 
 # IntelliJ build
 /intellij-out/
+/.idea/
 
 # Buck
 /buck-out
