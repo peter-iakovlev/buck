@@ -46,12 +46,12 @@ import com.facebook.buck.core.graph.transformation.model.ComputeResult;
 import com.facebook.buck.core.model.BuildId;
 import com.facebook.buck.core.model.BuildTarget;
 import com.facebook.buck.core.model.ConfigurationBuildTargets;
+import com.facebook.buck.core.model.EmptyTargetConfiguration;
 import com.facebook.buck.core.model.TargetConfiguration;
 import com.facebook.buck.core.model.TargetConfigurationSerializer;
 import com.facebook.buck.core.model.UnconfiguredBuildTargetView;
 import com.facebook.buck.core.model.actiongraph.computation.ActionGraphFactory;
 import com.facebook.buck.core.model.actiongraph.computation.ActionGraphProvider;
-import com.facebook.buck.core.model.impl.HostTargetConfiguration;
 import com.facebook.buck.core.model.impl.ImmutableDefaultTargetConfiguration;
 import com.facebook.buck.core.model.impl.JsonTargetConfigurationSerializer;
 import com.facebook.buck.core.module.BuckModuleManager;
@@ -70,7 +70,6 @@ import com.facebook.buck.core.util.log.Logger;
 import com.facebook.buck.counters.CounterBuckConfig;
 import com.facebook.buck.counters.CounterRegistry;
 import com.facebook.buck.counters.CounterRegistryImpl;
-import com.facebook.buck.distributed.DistBuildConfig;
 import com.facebook.buck.distributed.DistBuildUtil;
 import com.facebook.buck.doctor.DefaultDefectReporter;
 import com.facebook.buck.doctor.config.ImmutableDoctorConfig;
@@ -171,6 +170,7 @@ import com.facebook.buck.support.state.BuckGlobalStateLifecycleManager;
 import com.facebook.buck.support.state.BuckGlobalStateLifecycleManager.LifecycleStatus;
 import com.facebook.buck.test.config.TestBuckConfig;
 import com.facebook.buck.test.config.TestResultSummaryVerbosity;
+import com.facebook.buck.util.AbstractCloseableWrapper;
 import com.facebook.buck.util.BgProcessKiller;
 import com.facebook.buck.util.CloseableMemoizedSupplier;
 import com.facebook.buck.util.CloseableWrapper;
@@ -259,7 +259,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
-import java.util.TimeZone;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -282,8 +281,6 @@ import org.pf4j.PluginManager;
 public final class MainRunner {
   /**
    * Force JNA to be initialized early to avoid deadlock race condition.
-   *
-   * <p>
    *
    * <p>See: https://github.com/java-native-access/jna/issues/652
    */
@@ -312,7 +309,8 @@ public final class MainRunner {
   private final Architecture architecture;
 
   private static final Semaphore commandSemaphore = new Semaphore(1);
-  private static AtomicReference<ImmutableList<String>> activeCommandArgs = new AtomicReference<>();
+  private static final AtomicReference<ImmutableList<String>> activeCommandArgs =
+      new AtomicReference<>();
 
   private static volatile Optional<NGContext> commandSemaphoreNgClient = Optional.empty();
 
@@ -476,44 +474,53 @@ public final class MainRunner {
           runMainWithExitCode(
               watchmanFreshInstanceAction, initTimestamp, ImmutableList.copyOf(args));
     } catch (Throwable t) {
-
-      HumanReadableExceptionAugmentor augmentor;
       try {
-        augmentor =
-            new HumanReadableExceptionAugmentor(
-                parsedRootConfig
-                    .map(buckConfig -> buckConfig.getView(ErrorHandlingBuckConfig.class))
-                    .map(ErrorHandlingBuckConfig::getErrorMessageAugmentations)
-                    .orElse(ImmutableMap.of()));
-      } catch (HumanReadableException e) {
-        console.printErrorText(e.getHumanReadableErrorMessage());
-        augmentor = new HumanReadableExceptionAugmentor(ImmutableMap.of());
-      }
-      ErrorLogger logger =
-          new ErrorLogger(
-              new LogImpl() {
-                @Override
-                public void logUserVisible(String message) {
-                  console.printFailure(message);
-                }
-
-                @Override
-                public void logUserVisibleInternalError(String message) {
-                  console.printFailure(linesToText("Buck encountered an internal error", message));
-                }
-
-                @Override
-                public void logVerbose(Throwable e) {
-                  String message = "Command failed:";
-                  if (e instanceof InterruptedException
-                      || e instanceof ClosedByInterruptException) {
-                    message = "Command was interrupted:";
+        HumanReadableExceptionAugmentor augmentor;
+        try {
+          augmentor =
+              new HumanReadableExceptionAugmentor(
+                  parsedRootConfig
+                      .map(buckConfig -> buckConfig.getView(ErrorHandlingBuckConfig.class))
+                      .map(ErrorHandlingBuckConfig::getErrorMessageAugmentations)
+                      .orElse(ImmutableMap.of()));
+        } catch (HumanReadableException e) {
+          console.printErrorText(e.getHumanReadableErrorMessage());
+          augmentor = new HumanReadableExceptionAugmentor(ImmutableMap.of());
+        }
+        ErrorLogger logger =
+            new ErrorLogger(
+                new LogImpl() {
+                  @Override
+                  public void logUserVisible(String message) {
+                    console.printFailure(message);
                   }
-                  LOG.info(e, message);
-                }
-              },
-              augmentor);
-      logger.logException(t);
+
+                  @Override
+                  public void logUserVisibleInternalError(String message) {
+                    console.printFailure(
+                        linesToText("Buck encountered an internal error", message));
+                  }
+
+                  @Override
+                  public void logVerbose(Throwable e) {
+                    String message = "Command failed:";
+                    if (e instanceof InterruptedException
+                        || e instanceof ClosedByInterruptException) {
+                      message = "Command was interrupted:";
+                    }
+                    LOG.info(e, message);
+                  }
+                },
+                augmentor);
+        logger.logException(t);
+      } catch (Throwable ignored) {
+        // In some very rare cases error processing may error itself
+        // One example is logger implementation to throw while trying to log the error message
+        // Even for this case, we want proper exit code to be emitted, so we print the original
+        // exception to stderr as a last resort
+        System.err.println(t.getMessage());
+        t.printStackTrace();
+      }
       exitCode = ExceptionHandlerRegistryFactory.create().handleException(t);
     } finally {
       LOG.debug("Done.");
@@ -721,9 +728,6 @@ public final class MainRunner {
       // Setup the console.
       console = makeCustomConsole(context, verbosity, buckConfig);
 
-      DistBuildConfig distBuildConfig = new DistBuildConfig(buckConfig);
-      boolean isUsingDistributedBuild = false;
-
       ExecutionEnvironment executionEnvironment =
           new DefaultExecutionEnvironment(clientEnvironment, System.getProperties());
 
@@ -731,33 +735,13 @@ public final class MainRunner {
       // Remote Execution is in use. All RE builds should not use distributed build.
       final boolean isRemoteExecutionBuild =
           isRemoteExecutionBuild(command, buckConfig, executionEnvironment.getUsername());
+      ImmutableMap<String, String> environment = clientEnvironment;
       Optional<String> projectPrefix = Optional.empty();
       if (command.subcommand instanceof BuildCommand) {
         BuildCommand subcommand = (BuildCommand) command.subcommand;
-        isUsingDistributedBuild = subcommand.isUsingDistributedBuild();
-        boolean shouldUseDistributedBuild =
-            distBuildConfig.shouldUseDistributedBuild(
-                buildId, executionEnvironment.getUsername(), subcommand.getArguments());
-
-        if (isRemoteExecutionBuild && (isUsingDistributedBuild || shouldUseDistributedBuild)) {
-          String msg =
-              "Remote Execution is enabled. Deprecated distributed build will not be used.";
-          LOG.warn(msg);
-          printWarnMessage(msg);
-          subcommand.forceDisableDistributedBuild();
-          isUsingDistributedBuild = false;
-        } else if (!isUsingDistributedBuild && shouldUseDistributedBuild) {
-          isUsingDistributedBuild = subcommand.tryConvertingToStampede(distBuildConfig);
-        }
+        executionEnvironment.getUsername();
 
         projectPrefix = DistBuildUtil.getCommonProjectPrefix(subcommand.getArguments(), buckConfig);
-      }
-
-      // Switch to async file logging, if configured. A few log samples will have already gone
-      // via the regular file logger, but that's OK.
-      boolean isDistBuildCommand = command.subcommand instanceof DistBuildCommand;
-      if (isDistBuildCommand) {
-        LogConfig.setUseAsyncFileLogging(distBuildConfig.isAsyncLoggingEnabled());
       }
 
       RuleKeyConfiguration ruleKeyConfiguration =
@@ -815,7 +799,7 @@ public final class MainRunner {
 
       ParserConfig parserConfig = buckConfig.getView(ParserConfig.class);
       Watchman watchman =
-          buildWatchman(context, parserConfig, projectWatchList, clientEnvironment, console, clock);
+          buildWatchman(context, parserConfig, projectWatchList, environment, console, clock);
 
       ImmutableList<ConfigurationRuleDescription<?>> knownConfigurationDescriptions =
           PluginBasedKnownConfigurationDescriptionsFactory.createFromPlugins(pluginManager);
@@ -842,7 +826,7 @@ public final class MainRunner {
       ToolchainProviderFactory toolchainProviderFactory =
           new DefaultToolchainProviderFactory(
               pluginManager,
-              clientEnvironment,
+              environment,
               processExecutor,
               executableFinder,
               targetConfigurationSupplier);
@@ -947,7 +931,8 @@ public final class MainRunner {
               filteredUnexpandedArgsForLogging,
               filesystem.getBuckPaths().getLogDir(),
               isRemoteExecutionBuild,
-              cacheBuckConfig.getRepository());
+              cacheBuckConfig.getRepository(),
+              watchman.getVersion());
 
       RemoteExecutionConfig remoteExecutionConfig = buckConfig.getView(RemoteExecutionConfig.class);
       if (isRemoteExecutionBuild) {
@@ -1012,7 +997,7 @@ public final class MainRunner {
             ThrowingCloseableWrapper<ListeningExecutorService, InterruptedException>
                 httpWriteExecutorService =
                     getExecutorWrapper(
-                        getHttpWriteExecutorService(cacheBuckConfig, isUsingDistributedBuild),
+                        getHttpWriteExecutorService(cacheBuckConfig),
                         "HTTP Write",
                         cacheBuckConfig.getHttpWriterShutdownTimeout());
             ThrowingCloseableWrapper<ListeningExecutorService, InterruptedException>
@@ -1097,11 +1082,8 @@ public final class MainRunner {
                     logBuckConfig.getBuildDetailsCommands(),
                     createAdditionalConsoleLinesProviders(
                         remoteExecutionListener, remoteExecutionConfig, metadataProvider),
-                    isRemoteExecutionBuild
-                        ? Optional.of(
-                            remoteExecutionConfig.getDebugURLString(
-                                metadataProvider.get().getReSessionId()))
-                        : Optional.empty());
+                    isRemoteExecutionBuild ? Optional.of(remoteExecutionConfig) : Optional.empty(),
+                    metadataProvider);
             // This makes calls to LOG.error(...) post to the EventBus, instead of writing to
             // stderr.
             Closeable logErrorToEventBus =
@@ -1153,9 +1135,7 @@ public final class MainRunner {
                 CloseableWrapper.of(
                     Optional.ofNullable(semaphore),
                     s -> {
-                      if (s.isPresent()) {
-                        s.get().close();
-                      }
+                      s.ifPresent(AbstractCloseableWrapper::close);
                     });
             CloseableMemoizedSupplier<DepsAwareExecutor<? super ComputeResult, ?>>
                 depsAwareExecutorSupplier =
@@ -1212,9 +1192,7 @@ public final class MainRunner {
 
           if (isRemoteExecutionBuild) {
             List<BuckEventListener> remoteExecutionsListeners = Lists.newArrayList();
-            if (remoteExecutionListener.isPresent()) {
-              remoteExecutionsListeners.add(remoteExecutionListener.get());
-            }
+            remoteExecutionListener.ifPresent(remoteExecutionsListeners::add);
 
 
             commandEventListeners =
@@ -1236,7 +1214,7 @@ public final class MainRunner {
                   counterRegistry,
                   commandEventListeners,
                   remoteExecutionListener.isPresent()
-                      ? Optional.of((RemoteExecutionStatsProvider) remoteExecutionListener.get())
+                      ? Optional.of(remoteExecutionListener.get())
                       : Optional.empty(),
                   managerScope);
           consoleListener.register(buildEventBus);
@@ -1293,8 +1271,7 @@ public final class MainRunner {
                       buckConfig.getEnvironment()),
                   vcBuckConfig.getPregeneratedVersionControlStats());
           if ((vcBuckConfig.shouldGenerateStatistics() || shouldUploadBuildReport)
-              && command.subcommand instanceof AbstractCommand
-              && !(command.subcommand instanceof DistBuildCommand)) {
+              && command.subcommand instanceof AbstractCommand) {
             AbstractCommand subcommand = (AbstractCommand) command.subcommand;
             if (!commandMode.equals(CommandMode.TEST)) {
 
@@ -1413,7 +1390,7 @@ public final class MainRunner {
                         parserAndCaches.getParser(),
                         buildEventBus,
                         platform,
-                        clientEnvironment,
+                        environment,
                         rootCell
                             .getBuckConfig()
                             .getView(JavaBuckConfig.class)
@@ -1461,7 +1438,7 @@ public final class MainRunner {
             handleAutoFix(
                 filesystem,
                 console,
-                clientEnvironment,
+                environment,
                 command,
                 buckConfig,
                 buildId,
@@ -1535,7 +1512,7 @@ public final class MainRunner {
           hostPlatformFromConfig
               .map(ConfigurationBuildTargets::convert)
               .<TargetConfiguration>map(ImmutableDefaultTargetConfiguration::of)
-              .orElse(HostTargetConfiguration.INSTANCE);
+              .orElse(EmptyTargetConfiguration.INSTANCE);
       return () -> hostTargetConfiguration;
     }
     BuildTarget targetPlatform =
@@ -1651,6 +1628,10 @@ public final class MainRunner {
   private boolean isRemoteExecutionAutoEnabled(
       BuckCommand command, BuckConfig config, String username) {
     BuildCommand subcommand = (BuildCommand) command.getSubcommand().get();
+    if (subcommand.isRemoteExecutionForceDisabled()) {
+      return false;
+    }
+
     return config
         .getView(RemoteExecutionConfig.class)
         .isRemoteExecutionAutoEnabled(username, subcommand.getArguments());
@@ -1658,7 +1639,8 @@ public final class MainRunner {
 
   private boolean isRemoteExecutionBuild(BuckCommand command, BuckConfig config, String username) {
     if (!command.getSubcommand().isPresent()
-        || !(command.getSubcommand().get() instanceof BuildCommand)) {
+        || !(command.getSubcommand().get() instanceof BuildCommand)
+        || ((BuildCommand) command.getSubcommand().get()).isRemoteExecutionForceDisabled()) {
       return false;
     }
 
@@ -1666,11 +1648,11 @@ public final class MainRunner {
 
     ModernBuildRuleStrategyConfig strategyConfig =
         config.getView(ModernBuildRuleConfig.class).getDefaultStrategyConfig();
-    while (strategyConfig.getBuildStrategy(remoteExecutionAutoEnabled)
+    while (strategyConfig.getBuildStrategy(remoteExecutionAutoEnabled, false)
         == ModernBuildRuleBuildStrategy.HYBRID_LOCAL) {
       strategyConfig = strategyConfig.getHybridLocalConfig().getDelegateConfig();
     }
-    return strategyConfig.getBuildStrategy(remoteExecutionAutoEnabled)
+    return strategyConfig.getBuildStrategy(remoteExecutionAutoEnabled, false)
         == ModernBuildRuleBuildStrategy.REMOTE;
   }
 
@@ -1889,7 +1871,7 @@ public final class MainRunner {
     }
   }
 
-  private static final Watchman buildWatchman(
+  private static Watchman buildWatchman(
       Optional<NGContext> context,
       ParserConfig parserConfig,
       ImmutableSet<Path> projectWatchList,
@@ -1967,8 +1949,8 @@ public final class MainRunner {
   }
 
   private static ListeningExecutorService getHttpWriteExecutorService(
-      ArtifactCacheBuckConfig buckConfig, boolean isUsingDistributedBuild) {
-    if (isUsingDistributedBuild || buckConfig.hasAtLeastOneWriteableRemoteCache()) {
+      ArtifactCacheBuckConfig buckConfig) {
+    if (buckConfig.hasAtLeastOneWriteableRemoteCache()) {
       // Distributed builds need to upload from the local cache to the remote cache.
       ExecutorService executorService =
           MostExecutors.newMultiThreadExecutor(
@@ -2046,17 +2028,15 @@ public final class MainRunner {
     // Keep track of command that is in progress
     activeCommandArgs.set(currentArgs);
 
-    CloseableWrapper<Semaphore> semaphore =
-        CloseableWrapper.of(
-            commandSemaphore,
-            commandSemaphore -> {
-              activeCommandArgs.set(null);
-              commandSemaphoreNgClient = Optional.empty();
-              // TODO(buck_team): have background process killer have its own lifetime management
-              BgProcessKiller.disarm();
-              commandSemaphore.release();
-            });
-    return semaphore;
+    return CloseableWrapper.of(
+        commandSemaphore,
+        commandSemaphore -> {
+          activeCommandArgs.set(null);
+          commandSemaphoreNgClient = Optional.empty();
+          // TODO(buck_team): have background process killer have its own lifetime management
+          BgProcessKiller.disarm();
+          commandSemaphore.release();
+        });
   }
 
 
@@ -2241,25 +2221,26 @@ public final class MainRunner {
       Optional<String> buildDetailsTemplate,
       ImmutableSet<String> buildDetailsCommands,
       ImmutableList<AdditionalConsoleLineProvider> additionalConsoleLineProviders,
-      Optional<String> reSessionIDInfo) {
+      Optional<RemoteExecutionConfig> remoteExecutionConfig,
+      MetadataProvider metadataProvider) {
     RenderingConsole renderingConsole = new RenderingConsole(clock, console);
     if (config.isEnabled(console.getAnsi(), console.getVerbosity())) {
-      SuperConsoleEventBusListener superConsole =
-          new SuperConsoleEventBusListener(
-              config,
-              renderingConsole,
-              clock,
-              testResultSummaryVerbosity,
-              executionEnvironment,
-              locale,
-              testLogPath,
-              TimeZone.getDefault(),
-              buildId,
-              printBuildId,
-              buildDetailsTemplate,
-              buildDetailsCommands,
-              additionalConsoleLineProviders);
-      return superConsole;
+      return new SuperConsoleEventBusListener(
+          config,
+          renderingConsole,
+          clock,
+          testResultSummaryVerbosity,
+          executionEnvironment,
+          locale,
+          testLogPath,
+          buildId,
+          printBuildId,
+          buildDetailsTemplate,
+          buildDetailsCommands,
+          additionalConsoleLineProviders,
+          remoteExecutionConfig.isPresent()
+              ? remoteExecutionConfig.get().getStrategyConfig().getMaxConcurrentExecutions()
+              : 0);
     }
     if (renderingConsole.getVerbosity().isSilent()) {
       return new SilentConsoleEventBusListener(
@@ -2279,7 +2260,12 @@ public final class MainRunner {
         printBuildId,
         buildDetailsTemplate,
         buildDetailsCommands,
-        reSessionIDInfo,
+        remoteExecutionConfig.isPresent()
+            ? Optional.of(
+                remoteExecutionConfig
+                    .get()
+                    .getDebugURLString(metadataProvider.get().getReSessionId()))
+            : Optional.empty(),
         additionalConsoleLineProviders);
   }
 
@@ -2353,10 +2339,8 @@ public final class MainRunner {
             LOG.error(e, "Uncaught exception from thread %s", t);
           }
 
-          if (context.isPresent()) {
-            // Shut down the Nailgun server and make sure it stops trapping System.exit().
-            context.get().getNGServer().shutdown();
-          }
+          // Shut down the Nailgun server and make sure it stops trapping System.exit().
+          context.ifPresent(ngContext -> ngContext.getNGServer().shutdown());
 
           NON_REENTRANT_SYSTEM_EXIT.shutdownSoon(exitCode.getCode());
         });

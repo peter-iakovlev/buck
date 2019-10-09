@@ -22,6 +22,7 @@ import com.facebook.buck.apple.AppleConfig;
 import com.facebook.buck.apple.AppleLibraryDescription;
 import com.facebook.buck.apple.XCodeDescriptions;
 import com.facebook.buck.apple.XCodeDescriptionsFactory;
+import com.facebook.buck.apple.xcode.xcodeproj.PBXProject;
 import com.facebook.buck.cli.ProjectTestsMode;
 import com.facebook.buck.command.config.BuildBuckConfig;
 import com.facebook.buck.core.cell.Cell;
@@ -95,11 +96,9 @@ import java.io.InputStreamReader;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -132,7 +131,6 @@ public class XCodeProjectCommandHelper {
   private final ImmutableMap<String, String> environment;
   private final ListeningExecutorService executorService;
   private final List<String> arguments;
-  private final boolean absoluteHeaderMapPaths;
   private final boolean sharedLibrariesInBundles;
   private final boolean withTests;
   private final boolean withoutTests;
@@ -167,7 +165,6 @@ public class XCodeProjectCommandHelper {
       ListeningExecutorService parsingExecutorService,
       CloseableMemoizedSupplier<DepsAwareExecutor<? super ComputeResult, ?>> depsAwareExecutor,
       ImmutableSet<Flavor> appleCxxFlavors,
-      boolean absoluteHeaderMapPaths,
       boolean sharedLibrariesInBundles,
       boolean enableParserProfiling,
       boolean withTests,
@@ -198,7 +195,6 @@ public class XCodeProjectCommandHelper {
     this.environment = environment;
     this.executorService = executorService;
     this.arguments = arguments;
-    this.absoluteHeaderMapPaths = absoluteHeaderMapPaths;
     this.sharedLibrariesInBundles = sharedLibrariesInBundles;
     this.withTests = withTests;
     this.withoutTests = withoutTests;
@@ -363,14 +359,9 @@ public class XCodeProjectCommandHelper {
             .setShouldGenerateReadOnlyFiles(readOnly)
             .setShouldIncludeTests(isWithTests(buckConfig))
             .setShouldIncludeDependenciesTests(isWithDependenciesTests(buckConfig))
-            .setShouldUseHeaderMaps(true)
-            .setShouldUseAbsoluteHeaderMapPaths(absoluteHeaderMapPaths)
-            .setShouldMergeHeaderMaps(true)
             .setShouldAddLinkedLibrariesAsFlags(appleConfig.shouldAddLinkedLibrariesAsFlags())
             .setShouldForceLoadLinkWholeLibraries(
                 appleConfig.shouldAddLinkerFlagsForLinkWholeLibraries())
-            .setShouldGenerateHeaderSymlinkTreesOnly(
-                appleConfig.shouldGenerateHeaderSymlinkTreesOnly())
             .setShouldGenerateMissingUmbrellaHeader(
                 appleConfig.shouldGenerateMissingUmbrellaHeaders())
             .setShouldUseShortNamesForTargets(true)
@@ -381,19 +372,21 @@ public class XCodeProjectCommandHelper {
 
     ImmutableSet<BuildTarget> requiredBuildTargets =
         generateWorkspacesForTargets(
-            buckEventBus,
-            pluginManager,
-            cell,
-            buckConfig,
-            ruleKeyConfiguration,
-            executorService,
-            targetGraphCreationResult,
-            options,
-            appleCxxFlavors,
-            focusedTargetMatcher,
-            new HashMap<>(),
-            outputPresenter,
-            sharedLibraryToBundle);
+                buckEventBus,
+                pluginManager,
+                cell,
+                buckConfig,
+                ruleKeyConfiguration,
+                executorService,
+                targetGraphCreationResult,
+                options,
+                appleCxxFlavors,
+                focusedTargetMatcher,
+                outputPresenter,
+                sharedLibraryToBundle)
+            .stream()
+            .flatMap(b -> b.getBuildTargets().stream())
+            .collect(ImmutableSet.toImmutableSet());
     if (!requiredBuildTargets.isEmpty()) {
       ImmutableList<String> arguments =
           RichStream.from(requiredBuildTargets)
@@ -433,8 +426,27 @@ public class XCodeProjectCommandHelper {
     return exitCode;
   }
 
+  /** A result with metadata about the subcommand helper's output. */
+  public static class Result {
+    private final PBXProject project;
+    private final ImmutableSet<BuildTarget> buildTargets;
+
+    public Result(PBXProject project, ImmutableSet<BuildTarget> buildTargets) {
+      this.project = project;
+      this.buildTargets = buildTargets;
+    }
+
+    public PBXProject getProject() {
+      return project;
+    }
+
+    public ImmutableSet<BuildTarget> getBuildTargets() {
+      return buildTargets;
+    }
+  }
+
   @VisibleForTesting
-  static ImmutableSet<BuildTarget> generateWorkspacesForTargets(
+  static ImmutableList<Result> generateWorkspacesForTargets(
       BuckEventBus buckEventBus,
       PluginManager pluginManager,
       Cell cell,
@@ -444,8 +456,7 @@ public class XCodeProjectCommandHelper {
       TargetGraphCreationResult targetGraphCreationResult,
       ProjectGeneratorOptions options,
       ImmutableSet<Flavor> appleCxxFlavors,
-      FocusedTargetMatcher focusedTargetMatcher, // @audited(chatatap)
-      Map<Path, ProjectGenerator> projectGenerators,
+      FocusedTargetMatcher focusedTargetMatcher, // @audited(chatatap)]
       PathOutputPresenter presenter,
       Optional<ImmutableMap<BuildTarget, TargetNode<?>>> sharedLibraryToBundle)
       throws IOException, InterruptedException {
@@ -457,7 +468,7 @@ public class XCodeProjectCommandHelper {
 
     LOG.debug(
         "Generating workspace for config targets %s", targetGraphCreationResult.getBuildTargets());
-    ImmutableSet.Builder<BuildTarget> requiredBuildTargetsBuilder = ImmutableSet.builder();
+    ImmutableList.Builder<Result> generationResultsBuilder = ImmutableList.builder();
     for (BuildTarget inputTarget : targetGraphCreationResult.getBuildTargets()) {
       TargetNode<?> inputNode = targetGraphCreationResult.getTargetGraph().get(inputTarget);
       XcodeWorkspaceConfigDescriptionArg workspaceArgs;
@@ -509,22 +520,24 @@ public class XCodeProjectCommandHelper {
               sharedLibraryToBundle);
       Objects.requireNonNull(
           executorService, "CommandRunnerParams does not have executor for PROJECT pool");
-      Path outputPath =
-          generator.generateWorkspaceAndDependentProjects(projectGenerators, executorService);
+      WorkspaceAndProjectGenerator.Result result =
+          generator.generateWorkspaceAndDependentProjects();
 
       ImmutableSet<BuildTarget> requiredBuildTargetsForWorkspace =
           generator.getRequiredBuildTargets();
       LOG.debug(
           "Required build targets for workspace %s: %s",
           inputTarget, requiredBuildTargetsForWorkspace);
-      requiredBuildTargetsBuilder.addAll(requiredBuildTargetsForWorkspace);
 
-      Path absolutePath = workspaceCell.getFilesystem().resolve(outputPath);
+      Path absolutePath = workspaceCell.getFilesystem().resolve(result.getWorkspacePath());
       Path relativePath = cell.getFilesystem().relativize(absolutePath);
       presenter.present(inputTarget.getFullyQualifiedName(), relativePath);
+
+      generationResultsBuilder.add(
+          new Result(result.getProject(), requiredBuildTargetsForWorkspace));
     }
 
-    return requiredBuildTargetsBuilder.build();
+    return generationResultsBuilder.build();
   }
 
   @SuppressWarnings(value = "unchecked")

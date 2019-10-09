@@ -40,12 +40,7 @@
 
 {param args}
 
-{call buck.arg}
-  {param name: 'name' /}
-  {param desc}
-  The name of the rule.
-  {/param}
-{/call}
+{call buck.name_arg /}
 
 {call buck.arg}
   {param name: 'framework' /}
@@ -57,7 +52,10 @@
   {/param}
 {/call}
 
+{call test_common.contacts_arg /}
+
 {call rust_common.srcs_arg /}
+
 {call rust_common.mapped_srcs_arg /}
 
 {call rust_common.deps_arg /}

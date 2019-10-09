@@ -16,6 +16,7 @@
 
 package com.facebook.buck.apple;
 
+import com.facebook.buck.apple.simulator.AppleDeviceController;
 import com.facebook.buck.apple.toolchain.AppleDeveloperDirectoryForTestsProvider;
 import com.facebook.buck.core.build.buildable.context.BuildableContext;
 import com.facebook.buck.core.build.context.BuildContext;
@@ -75,7 +76,7 @@ public class AppleTest extends AbstractBuildRuleWithDeclaredAndExtraDeps
 
   private final Optional<SourcePath> xctool;
 
-  private Optional<Long> xctoolStutterTimeout;
+  private Optional<Long> stutterTimeout;
 
   private final Tool xctest;
 
@@ -107,12 +108,15 @@ public class AppleTest extends AbstractBuildRuleWithDeclaredAndExtraDeps
   private Optional<Long> testRuleTimeoutMs;
 
   private Optional<AppleTestXctoolStdoutReader> xctoolStdoutReader;
+  private Optional<AppleTestIdbStdoutReader> idbStdoutReader;
   private Optional<AppleTestXctestOutputReader> xctestOutputReader;
 
   private final String testLogDirectoryEnvironmentVariable;
   private final String testLogLevelEnvironmentVariable;
   private final String testLogLevel;
   private final Optional<ImmutableMap<String, String>> testSpecificEnvironmentVariables;
+  private final boolean useIdb;
+  private final Path idbPath;
 
   /**
    * Absolute path to xcode developer dir.
@@ -144,6 +148,27 @@ public class AppleTest extends AbstractBuildRuleWithDeclaredAndExtraDeps
     }
   }
 
+  private static class AppleTestIdbStdoutReader implements IdbRunTestsStep.StdoutReadingCallback {
+
+    private final TestCaseSummariesBuildingIdb idbTestHandler;
+
+    public AppleTestIdbStdoutReader(TestRule.TestReportingCallback testReportingCallback) {
+      this.idbTestHandler = new TestCaseSummariesBuildingIdb(testReportingCallback);
+    }
+
+    @Override
+    public void readStdout(InputStream stdout) throws IOException {
+      try (InputStreamReader stdoutReader = new InputStreamReader(stdout, StandardCharsets.UTF_8);
+          BufferedReader bufferedReader = new BufferedReader(stdoutReader)) {
+        IdbOutputParsing.streamOutputFromReader(bufferedReader, idbTestHandler);
+      }
+    }
+
+    public ImmutableList<TestCaseSummary> getTestCaseSummaries() {
+      return idbTestHandler.getTestCaseSummaries();
+    }
+  }
+
   private static class AppleTestXctestOutputReader
       implements XctestRunTestsStep.OutputReadingCallback {
 
@@ -169,7 +194,7 @@ public class AppleTest extends AbstractBuildRuleWithDeclaredAndExtraDeps
 
   AppleTest(
       Optional<SourcePath> xctool,
-      Optional<Long> xctoolStutterTimeout,
+      Optional<Long> stutterTimeout,
       Tool xctest,
       boolean useXctest,
       String platformName,
@@ -191,10 +216,12 @@ public class AppleTest extends AbstractBuildRuleWithDeclaredAndExtraDeps
       Optional<Long> testRuleTimeoutMs,
       boolean isUiTest,
       Optional<Either<SourcePath, String>> snapshotReferenceImagesPath,
-      Optional<ImmutableMap<String, String>> testSpecificEnvironmentVariables) {
+      Optional<ImmutableMap<String, String>> testSpecificEnvironmentVariables,
+      boolean useIdb,
+      Path idbPath) {
     super(buildTarget, projectFilesystem, params);
     this.xctool = xctool;
-    this.xctoolStutterTimeout = xctoolStutterTimeout;
+    this.stutterTimeout = stutterTimeout;
     this.useXctest = useXctest;
     this.xctest = xctest;
     this.platformName = platformName;
@@ -218,6 +245,8 @@ public class AppleTest extends AbstractBuildRuleWithDeclaredAndExtraDeps
     this.isUiTest = isUiTest;
     this.snapshotReferenceImagesPath = snapshotReferenceImagesPath;
     this.testSpecificEnvironmentVariables = testSpecificEnvironmentVariables;
+    this.useIdb = useIdb;
+    this.idbPath = idbPath;
   }
 
   @Override
@@ -337,7 +366,7 @@ public class AppleTest extends AbstractBuildRuleWithDeclaredAndExtraDeps
               getProjectFilesystem(),
               buildContext.getSourcePathResolver().getAbsolutePath(xctool.get()),
               testEnvironmentOverrides,
-              xctoolStutterTimeout,
+              stutterTimeout,
               platformName,
               destinationSpecifierArg,
               logicTestPathsBuilder.build(),
@@ -354,7 +383,39 @@ public class AppleTest extends AbstractBuildRuleWithDeclaredAndExtraDeps
               Optional.of(testLogLevel),
               testRuleTimeoutMs,
               snapshotReferenceImagesPath);
-      steps.add(xctoolStep);
+
+      if (useIdb) {
+        idbStdoutReader = Optional.of(new AppleTestIdbStdoutReader(testReportingCallback));
+        AppleDeviceController appleDeviceController =
+            new AppleDeviceController(context.getProcessExecutor(), idbPath);
+        Optional<String> deviceUdid;
+        if (platformName.contains("mac")) {
+          deviceUdid = Optional.of("mac");
+        } else {
+          deviceUdid = appleDeviceController.getSimulatorUdidForTest();
+        }
+        ImmutableList<IdbRunTestsStep> idbSteps =
+            IdbRunTestsStep.createCommands(
+                idbPath,
+                getProjectFilesystem(),
+                platformName,
+                testBundle,
+                resolvedTestOutputPath,
+                idbStdoutReader,
+                options.getTestSelectorList(),
+                stutterTimeout,
+                testRuleTimeoutMs,
+                logicTestPathsBuilder.build(),
+                appTestPathsToHostAppsBuilder.build(),
+                appTestPathsToTestHostAppPathsToTestTargetAppsBuilder.build(),
+                deviceUdid);
+        for (IdbRunTestsStep step : idbSteps) {
+          steps.add(step);
+        }
+      } else {
+        steps.add(xctoolStep);
+      }
+
       String xctoolTypeSuffix;
       if (uiTestTargetApp.isPresent()) {
         xctoolTypeSuffix = "uitest";
@@ -426,10 +487,12 @@ public class AppleTest extends AbstractBuildRuleWithDeclaredAndExtraDeps
       boolean isUsingTestSelectors) {
     return () -> {
       List<TestCaseSummary> testCaseSummaries;
-      if (xctoolStdoutReader.isPresent()) {
+      if (xctoolStdoutReader.isPresent() && !useIdb) {
         // We've already run the tests with 'xctool' and parsed
         // their output; no need to parse the same output again.
         testCaseSummaries = xctoolStdoutReader.get().getTestCaseSummaries();
+      } else if (useIdb && idbStdoutReader.isPresent()) {
+        testCaseSummaries = idbStdoutReader.get().getTestCaseSummaries();
       } else if (xctestOutputReader.isPresent()) {
         // We've already run the tests with 'xctest' and parsed
         // their output; no need to parse the same output again.
@@ -448,6 +511,11 @@ public class AppleTest extends AbstractBuildRuleWithDeclaredAndExtraDeps
                 new TestCaseSummariesBuildingXctestEventHandler(NOOP_REPORTING_CALLBACK);
             XctestOutputParsing.streamOutput(reader, xctestEventHandler);
             testCaseSummaries = xctestEventHandler.getTestCaseSummaries();
+          } else if (useIdb) {
+            TestCaseSummariesBuildingIdb idbEventHandler =
+                new TestCaseSummariesBuildingIdb(NOOP_REPORTING_CALLBACK);
+            IdbOutputParsing.streamOutputFromReader(reader, idbEventHandler);
+            testCaseSummaries = idbEventHandler.getTestCaseSummaries();
           } else {
             TestCaseSummariesBuildingXctoolEventHandler xctoolEventHandler =
                 new TestCaseSummariesBuildingXctoolEventHandler(NOOP_REPORTING_CALLBACK);

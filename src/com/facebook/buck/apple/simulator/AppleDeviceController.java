@@ -107,17 +107,79 @@ public class AppleDeviceController {
     return simulators.build();
   }
 
+  /** @return the set of Apple physical devices */
+  public ImmutableSet<ImmutableAppleDevice> getPhysicalDevices() {
+    ImmutableSet<ImmutableAppleDevice> devices;
+    ImmutableSet.Builder<ImmutableAppleDevice> physicalDevices = ImmutableSet.builder();
+    try {
+      devices = getDevices();
+    } catch (IOException | InterruptedException e) {
+      e.printStackTrace();
+      devices = ImmutableSet.of();
+    }
+
+    for (ImmutableAppleDevice device : devices) {
+      if (device.getType().equals("device")) physicalDevices.add(device);
+    }
+    return physicalDevices.build();
+  }
+
   /** @return set of udids of the booted devices */
   public ImmutableSet<String> getBootedSimulatorsUdids() {
     ImmutableSet.Builder<String> bootedSimulatorUdids = ImmutableSet.builder();
     ImmutableSet<ImmutableAppleDevice> allTargets = getSimulators();
 
     for (ImmutableAppleDevice target : allTargets) {
-      if (target.getState().equals("Booted") && target.getType().equals("simulator")) {
+      if (target.getState().toLowerCase().equals("booted")
+          && target.getType().equals("simulator")) {
         bootedSimulatorUdids.add(target.getUdid());
       }
     }
     return bootedSimulatorUdids.build();
+  }
+
+  /**
+   * @return the udid of the device that has the determined name. If no device is found with that
+   *     name, will return optional empty
+   */
+  public Optional<String> getUdidFromDeviceName(String name) {
+    ImmutableSet<ImmutableAppleDevice> devices;
+    try {
+      devices = getDevices();
+    } catch (IOException | InterruptedException e) {
+      e.printStackTrace();
+      return Optional.empty();
+    }
+    for (ImmutableAppleDevice device : devices) {
+      if (device.getName().equals(name)) {
+        return Optional.of(device.getUdid());
+      }
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * Picks the simulator to be used for testing
+   *
+   * @return the udid of any booted simulator (iphone) and if there are none returns any simulator.
+   *     If there are none, returns optional empty
+   */
+  public Optional<String> getSimulatorUdidForTest() {
+    ImmutableSet<ImmutableAppleDevice> simulators = getSimulators();
+    if (simulators.isEmpty()) {
+      return Optional.empty();
+    }
+    for (ImmutableAppleDevice simulator : simulators) {
+      if (simulator.getState().toLowerCase().equals("booted")) {
+        return Optional.of(simulator.getUdid());
+      }
+    }
+    for (ImmutableAppleDevice simulator : simulators) {
+      if (getDeviceKind(simulator) == AppleDeviceKindEnum.MOBILE) {
+        return Optional.of(simulator.getUdid());
+      }
+    }
+    return Optional.empty();
   }
 
   /**
@@ -178,19 +240,32 @@ public class AppleDeviceController {
    *
    * @return true if the bundle was installed, false otherwise.
    */
-  public boolean installBundle(String deviceUdid, Path bundlePath)
+  public Optional<String> installBundle(String deviceUdid, Path bundlePath)
       throws IOException, InterruptedException {
     ImmutableList<String> command =
         ImmutableList.of(
             idbPath.toString(), "install", "--udid", deviceUdid, bundlePath.toString());
     ProcessExecutorParams processExecutorParams =
         ProcessExecutorParams.builder().setCommand(command).build();
-    ProcessExecutor.Result result = processExecutor.launchAndExecute(processExecutorParams);
+    Set<ProcessExecutor.Option> options = EnumSet.of(ProcessExecutor.Option.EXPECTING_STD_OUT);
+    ProcessExecutor.Result result =
+        processExecutor.launchAndExecute(
+            processExecutorParams,
+            options,
+            /* stdin */ Optional.empty(),
+            /* timeOutMs */ Optional.empty(),
+            /* timeOutHandler */ Optional.empty());
     if (result.getExitCode() != 0) {
       LOG.error(result.getMessageForUnexpectedResult(command.toString()));
-      return false;
+      return Optional.empty();
     }
-    return true;
+    if (!result.getStdout().isPresent()) {
+      LOG.error("Could not get the bundle id of the installed app");
+      return Optional.empty();
+    }
+
+    String output[] = result.getStdout().get().split(" ");
+    return Optional.of(output[1]);
   }
 
   /**
@@ -218,15 +293,10 @@ public class AppleDeviceController {
    *
    * @return true if it was able to launch and false otherwise
    */
-  public boolean launchInstalledBundle(
-      String deviceUdid, String bundleID, LaunchBehavior launchBehavior)
+  public boolean launchInstalledBundle(String deviceUdid, String bundleID)
       throws IOException, InterruptedException {
     ImmutableList.Builder<String> commandBuilder = ImmutableList.builder();
-    commandBuilder.add(idbPath.toString(), "launch", bundleID);
-    if (launchBehavior == LaunchBehavior.WAIT_FOR_DEBUGGER) {
-      commandBuilder.add("-w");
-    }
-    commandBuilder.add("--udid", deviceUdid);
+    commandBuilder.add(idbPath.toString(), "launch", bundleID, "--udid", deviceUdid);
     ImmutableList<String> command = commandBuilder.build();
     ProcessExecutorParams processExecutorParams =
         ProcessExecutorParams.builder().setCommand(command).build();
@@ -242,6 +312,38 @@ public class AppleDeviceController {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Starts the debugserver of the installed app
+   *
+   * @return the command to be run in lldb
+   */
+  public Optional<String> startDebugServer(String deviceUdid, String bundleID)
+      throws IOException, InterruptedException {
+    ImmutableList<String> command =
+        ImmutableList.of(
+            idbPath.toString(), "debugserver", "start", bundleID, "--udid", deviceUdid);
+    LOG.debug("Starting the debug server with the command %s", command);
+    ProcessExecutorParams processExecutorParams =
+        ProcessExecutorParams.builder().setCommand(command).build();
+    Set<ProcessExecutor.Option> options = EnumSet.of(ProcessExecutor.Option.EXPECTING_STD_OUT);
+    ProcessExecutor.Result result =
+        processExecutor.launchAndExecute(
+            processExecutorParams,
+            options,
+            /* stdin */ Optional.empty(),
+            /* timeOutMs */ Optional.empty(),
+            /* timeOutHandler */ Optional.empty());
+    if (result.getExitCode() != 0) {
+      LOG.error("Could not start debug server");
+      return Optional.empty();
+    }
+    if (!result.getStdout().isPresent()) {
+      LOG.error("Could not get debug server command from idb");
+      return Optional.empty();
+    }
+    return result.getStdout();
   }
 
   /**

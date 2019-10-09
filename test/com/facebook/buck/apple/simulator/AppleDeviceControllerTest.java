@@ -36,6 +36,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.AbstractMap.SimpleImmutableEntry;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -203,7 +204,8 @@ public class AppleDeviceControllerTest {
 
   @Test
   public void installingBundleInSimulatorWorks() throws IOException, InterruptedException {
-    FakeProcess fakeInstallProcess = new FakeProcess(0);
+    FakeProcess fakeInstallProcess =
+        new FakeProcess(0, "Installed: com.MyNeatApp 9CBB9A6E-A511-C503-F000-7EB616BE0CBC", "");
     ProcessExecutorParams fakeInstallParams =
         ProcessExecutorParams.builder()
             .setCommand(
@@ -218,10 +220,10 @@ public class AppleDeviceControllerTest {
         new FakeProcessExecutor(ImmutableMap.of(fakeInstallParams, fakeInstallProcess));
     AppleDeviceController deviceController =
         new AppleDeviceController(fakeProcessExecutor, IDB_PATH);
-    boolean installed =
+    Optional<String> installedResult =
         deviceController.installBundle(
             "70200ED8-EEF1-4BDB-BCCF-3595B137D67D", Paths.get("Path/To/MyNeatApp.app"));
-    assertThat(installed, is(true));
+    assertThat(installedResult.get(), is("com.MyNeatApp"));
   }
 
   @Test
@@ -262,24 +264,23 @@ public class AppleDeviceControllerTest {
         new AppleDeviceController(fakeProcessExecutor, IDB_PATH);
     boolean launchStatus =
         appleDeviceController.launchInstalledBundle(
-            "70200ED8-EEF1-4BDB-BCCF-3595B137D67D",
-            "com.facebook.MyNeatApp",
-            AppleDeviceController.LaunchBehavior.DO_NOT_WAIT_FOR_DEBUGGER);
+            "70200ED8-EEF1-4BDB-BCCF-3595B137D67D", "com.facebook.MyNeatApp");
     assertThat(launchStatus, is(true));
   }
 
   @Test
   public void launchingInstalledBundleWaitingForDebuggerWorks()
       throws IOException, InterruptedException {
-    FakeProcess fakeLaunchProcess = new FakeProcess(0, "com.facebook.MyNeatApp: 42", "");
+    FakeProcess fakeLaunchProcess =
+        new FakeProcess(0, "process connect connect://localhost:10881", "");
     ProcessExecutorParams fakeLaunchParams =
         ProcessExecutorParams.builder()
             .setCommand(
                 ImmutableList.of(
                     IDB_PATH.toString(),
-                    "launch",
+                    "debugserver",
+                    "start",
                     "com.facebook.MyNeatApp",
-                    "-w",
                     "--udid",
                     "70200ED8-EEF1-4BDB-BCCF-3595B137D67D"))
             .build();
@@ -287,13 +288,11 @@ public class AppleDeviceControllerTest {
         new FakeProcessExecutor(ImmutableMap.of(fakeLaunchParams, fakeLaunchProcess));
     AppleDeviceController appleDeviceController =
         new AppleDeviceController(fakeProcessExecutor, IDB_PATH);
-    boolean launchStatus =
-        appleDeviceController.launchInstalledBundle(
-            "70200ED8-EEF1-4BDB-BCCF-3595B137D67D",
-            "com.facebook.MyNeatApp",
-            AppleDeviceController.LaunchBehavior.WAIT_FOR_DEBUGGER);
+    Optional<String> debugServer =
+        appleDeviceController.startDebugServer(
+            "70200ED8-EEF1-4BDB-BCCF-3595B137D67D", "com.facebook.MyNeatApp");
 
-    assertThat(launchStatus, is(true));
+    assertThat(debugServer, is(Optional.of("process connect connect://localhost:10881\n")));
   }
 
   @Test
@@ -305,276 +304,156 @@ public class AppleDeviceControllerTest {
       FakeProcess fakeIdbList = new FakeProcess(0, stdin, stdout, stderr);
       ProcessExecutorParams processExecutorParams =
           ProcessExecutorParams.builder()
-              .setCommand(ImmutableList.of("/pathTo/idb", "list-targets", "--json"))
+              .setCommand(ImmutableList.of(IDB_PATH.toString(), "list-targets", "--json"))
               .build();
       FakeProcessExecutor fakeProcessExecutor =
           new FakeProcessExecutor(ImmutableMap.of(processExecutorParams, fakeIdbList));
       AppleDeviceController deviceController =
-          new AppleDeviceController(fakeProcessExecutor, Paths.get("/pathTo/idb"));
+          new AppleDeviceController(fakeProcessExecutor, IDB_PATH);
       simulators = deviceController.getSimulators();
     }
 
     ImmutableSet<ImmutableAppleDevice> expected =
         ImmutableSet.of(
             (new ImmutableAppleDevice(
-                "Apple Watch Series 2 - 38mm",
-                "",
+                "Apple Watch Series 2 - 38mm", "", "Shutdown", "simulator", "watchOS 5.2", "i386")),
+            (new ImmutableAppleDevice(
+                "Apple Watch Series 2 - 42mm", "", "Shutdown", "simulator", "watchOS 5.2", "i386")),
+            (new ImmutableAppleDevice(
+                "Apple Watch Series 3 - 38mm", "", "Shutdown", "simulator", "watchOS 5.2", "i386")),
+            (new ImmutableAppleDevice(
+                "Apple Watch Series 3 - 42mm", "", "Shutdown", "simulator", "watchOS 5.2", "i386")),
+            (new ImmutableAppleDevice(
+                "Apple Watch Series 4 - 40mm", "", "Shutdown", "simulator", "watchOS 5.2", "i386")),
+            (new ImmutableAppleDevice(
+                "Apple Watch Series 4 - 44mm", "", "Shutdown", "simulator", "watchOS 5.2", "i386")),
+            (new ImmutableAppleDevice(
+                "iPad Air (3rd generation)", "", "Booted", "simulator", "iOS 12.2", "x86_64")),
+            (new ImmutableAppleDevice(
+                "iPhone 5s", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
+            (new ImmutableAppleDevice(
+                "iPhone 6", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
+            (new ImmutableAppleDevice(
+                "iPhone 6 Plus", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
+            (new ImmutableAppleDevice(
+                "iPhone 6s", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
+            (new ImmutableAppleDevice(
+                "iPhone 6s Plus", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
+            (new ImmutableAppleDevice(
+                "iPhone 7", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
+            (new ImmutableAppleDevice(
+                "iPhone 7 Plus", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
+            (new ImmutableAppleDevice(
+                "iPhone 8", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
+            (new ImmutableAppleDevice(
+                "iPhone 8 Plus", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
+            (new ImmutableAppleDevice(
+                "iPhone SE", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
+            (new ImmutableAppleDevice(
+                "iPhone X",
+                "DF85F9BE-70D1-4706-B95F-58CD25986051",
                 "Shutdown",
                 "simulator",
-                "watchOS 5.2",
-                "i386",
-                "",
-                "0",
-                "false")),
+                "iOS 12.4",
+                "x86_64")),
             (new ImmutableAppleDevice(
-                "Apple Watch Series 2 - 42mm",
-                "",
-                "Shutdown",
-                "simulator",
-                "watchOS 5.2",
-                "i386",
-                "",
-                "0",
-                "false")),
+                "iPhone Xs", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "Apple Watch Series 3 - 38mm",
-                "",
-                "Shutdown",
-                "simulator",
-                "watchOS 5.2",
-                "i386",
-                "",
-                "0",
-                "false")),
+                "iPhone Xs Max", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "Apple Watch Series 3 - 42mm",
-                "",
-                "Shutdown",
-                "simulator",
-                "watchOS 5.2",
-                "i386",
-                "",
-                "0",
-                "false")),
+                "iPhone X\u0280", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "Apple Watch Series 4 - 40mm",
-                "",
-                "Shutdown",
-                "simulator",
-                "watchOS 5.2",
-                "i386",
-                "",
-                "0",
-                "false")),
+                "iPad (5th generation)", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "Apple Watch Series 4 - 44mm",
-                "",
-                "Shutdown",
-                "simulator",
-                "watchOS 5.2",
-                "i386",
-                "",
-                "0",
-                "false")),
+                "iPad (6th generation)", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "iPad Air (3rd generation)",
-                "",
-                "Booted",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
+                "iPad Air", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "iPhone 5s", "", "Shutdown", "simulator", "iOS 12.2", "x86_64", "", "0", "false")),
+                "iPad Air 2", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "iPhone 6", "", "Shutdown", "simulator", "iOS 12.2", "x86_64", "", "0", "false")),
+                "iPad Pro (10.5-inch)", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "iPhone 6 Plus",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
+                "iPad Pro (11-inch)", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "iPhone 6s", "", "Shutdown", "simulator", "iOS 12.2", "x86_64", "", "0", "false")),
-            (new ImmutableAppleDevice(
-                "iPhone 6s Plus",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
-            (new ImmutableAppleDevice(
-                "iPhone 7", "", "Shutdown", "simulator", "iOS 12.2", "x86_64", "", "0", "false")),
-            (new ImmutableAppleDevice(
-                "iPhone 7 Plus",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
-            (new ImmutableAppleDevice(
-                "iPhone 8", "", "Shutdown", "simulator", "iOS 12.2", "x86_64", "", "0", "false")),
-            (new ImmutableAppleDevice(
-                "iPhone 8 Plus",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
-            (new ImmutableAppleDevice(
-                "iPhone SE", "", "Shutdown", "simulator", "iOS 12.2", "x86_64", "", "0", "false")),
-            (new ImmutableAppleDevice(
-                "iPhone X", "", "Shutdown", "simulator", "iOS 12.2", "x86_64", "", "0", "false")),
-            (new ImmutableAppleDevice(
-                "iPhone Xs", "", "Shutdown", "simulator", "iOS 12.2", "x86_64", "", "0", "false")),
-            (new ImmutableAppleDevice(
-                "iPhone Xs Max",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
-            (new ImmutableAppleDevice(
-                "iPhone X\u0280",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
-            (new ImmutableAppleDevice(
-                "iPad (5th generation)",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
-            (new ImmutableAppleDevice(
-                "iPad (6th generation)",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
-            (new ImmutableAppleDevice(
-                "iPad Air", "", "Shutdown", "simulator", "iOS 12.2", "x86_64", "", "0", "false")),
-            (new ImmutableAppleDevice(
-                "iPad Air 2", "", "Shutdown", "simulator", "iOS 12.2", "x86_64", "", "0", "false")),
-            (new ImmutableAppleDevice(
-                "iPad Pro (10.5-inch)",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
-            (new ImmutableAppleDevice(
-                "iPad Pro (11-inch)",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
-            (new ImmutableAppleDevice(
-                "iPad Pro (12.9-inch)",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
+                "iPad Pro (12.9-inch)", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
                 "iPad Pro (12.9-inch) (2nd generation)",
                 "",
                 "Shutdown",
                 "simulator",
                 "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
+                "x86_64")),
             (new ImmutableAppleDevice(
                 "iPad Pro (12.9-inch) (3rd generation)",
                 "",
                 "Shutdown",
                 "simulator",
                 "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
+                "x86_64")),
             (new ImmutableAppleDevice(
-                "iPad Pro (9.7-inch)",
-                "",
-                "Shutdown",
-                "simulator",
-                "iOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
+                "iPad Pro (9.7-inch)", "", "Shutdown", "simulator", "iOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "Apple TV", "", "Shutdown", "simulator", "tvOS 12.2", "x86_64", "", "0", "false")),
+                "Apple TV", "", "Shutdown", "simulator", "tvOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "Apple TV 4K",
-                "",
-                "Shutdown",
-                "simulator",
-                "tvOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")),
+                "Apple TV 4K", "", "Shutdown", "simulator", "tvOS 12.2", "x86_64")),
             (new ImmutableAppleDevice(
-                "Apple TV 4K (at 1080p)",
-                "",
-                "Shutdown",
-                "simulator",
-                "tvOS 12.2",
-                "x86_64",
-                "",
-                "0",
-                "false")));
+                "Apple TV 4K (at 1080p)", "", "Shutdown", "simulator", "tvOS 12.2", "x86_64")));
 
     assertEquals(simulators, expected);
   }
 
   @Test
-  public void getBootedSimulatorDeviceUdidsTest() throws IOException, InterruptedException {
+  public void getPhysicalDevicesTest() throws IOException {
+    ImmutableSet<ImmutableAppleDevice> physicalDevices;
+    try (OutputStream stdin = new ByteArrayOutputStream();
+        InputStream stdout = getClass().getResourceAsStream("testdata/idb-list.txt");
+        InputStream stderr = new ByteArrayInputStream(new byte[0])) {
+      FakeProcess fakeIdbList = new FakeProcess(0, stdin, stdout, stderr);
+      ProcessExecutorParams processExecutorParams =
+          ProcessExecutorParams.builder()
+              .setCommand(ImmutableList.of(IDB_PATH.toString(), "list-targets", "--json"))
+              .build();
+      FakeProcessExecutor fakeProcessExecutor =
+          new FakeProcessExecutor(ImmutableMap.of(processExecutorParams, fakeIdbList));
+      AppleDeviceController deviceController =
+          new AppleDeviceController(fakeProcessExecutor, IDB_PATH);
+      physicalDevices = deviceController.getPhysicalDevices();
+    }
+
+    ImmutableSet<ImmutableAppleDevice> expected =
+        ImmutableSet.of(
+            new ImmutableAppleDevice("iPhone", "", "Booted", "device", "iOS 12.4", "arm64"));
+
+    assertEquals(physicalDevices, expected);
+  }
+
+  @Test
+  public void getBootedSimulatorDeviceUdidsTest() throws IOException {
     ImmutableSet<String> devices;
+    try (OutputStream stdin = new ByteArrayOutputStream();
+        InputStream stdout = getClass().getResourceAsStream("testdata/idb-list.txt");
+        InputStream stderr = new ByteArrayInputStream(new byte[0])) {
+      FakeProcess fakeIdbList = new FakeProcess(0, stdin, stdout, stderr);
+      ProcessExecutorParams processExecutorParams =
+          ProcessExecutorParams.builder()
+              .setCommand(ImmutableList.of(IDB_PATH.toString(), "list-targets", "--json"))
+              .build();
+      FakeProcessExecutor fakeProcessExecutor =
+          new FakeProcessExecutor(ImmutableMap.of(processExecutorParams, fakeIdbList));
+
+      AppleDeviceController deviceController =
+          new AppleDeviceController(fakeProcessExecutor, IDB_PATH);
+      devices = deviceController.getBootedSimulatorsUdids();
+    }
+
+    ImmutableSet<String> expected = ImmutableSet.of("");
+
+    assertEquals(devices, expected);
+  }
+
+  @Test
+  public void getUdidFromDeviceName() throws IOException {
+    Optional<String> udid;
     try (OutputStream stdin = new ByteArrayOutputStream();
         InputStream stdout = getClass().getResourceAsStream("testdata/idb-list.txt");
         InputStream stderr = new ByteArrayInputStream(new byte[0])) {
@@ -588,11 +467,10 @@ public class AppleDeviceControllerTest {
 
       AppleDeviceController deviceController =
           new AppleDeviceController(fakeProcessExecutor, Paths.get("/pathTo/idb"));
-      devices = deviceController.getBootedSimulatorsUdids();
+      udid = deviceController.getUdidFromDeviceName("iPhone X");
     }
 
-    ImmutableSet<String> expected = ImmutableSet.of("");
-
-    assertEquals(devices, expected);
+    Optional<String> expected = Optional.of("DF85F9BE-70D1-4706-B95F-58CD25986051");
+    assertEquals(udid, expected);
   }
 }

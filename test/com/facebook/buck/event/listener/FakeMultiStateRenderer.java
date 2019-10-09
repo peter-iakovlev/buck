@@ -37,13 +37,13 @@ public class FakeMultiStateRenderer implements MultiStateRenderer {
   }
 
   @Override
-  public ImmutableList<Long> getSortedExecutorIds(boolean sortByTime) {
+  public ImmutableList<Long> getSortedIds(boolean sortByTime) {
     lastSortWasByTime = sortByTime;
     return threadIds;
   }
 
   @Override
-  public String renderStatusLine(long executorID, StringBuilder lineBuilder) {
+  public String renderStatusLine(long executorID) {
     return " - Status of thread " + executorID;
   }
 

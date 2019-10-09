@@ -46,13 +46,14 @@ import com.facebook.buck.core.rules.analysis.impl.ImmutableFakeRuleAnalysisResul
 import com.facebook.buck.core.rules.config.registry.impl.ConfigurationRuleRegistryFactory;
 import com.facebook.buck.core.rules.impl.FakeBuildRule;
 import com.facebook.buck.core.rules.impl.RuleAnalysisLegacyBuildRuleView;
-import com.facebook.buck.core.rules.providers.ProviderInfoCollection;
-import com.facebook.buck.core.rules.providers.impl.ProviderInfoCollectionImpl;
+import com.facebook.buck.core.rules.providers.collect.ProviderInfoCollection;
+import com.facebook.buck.core.rules.providers.collect.impl.TestProviderInfoCollectionImpl;
 import com.facebook.buck.core.rules.transformer.impl.DefaultTargetNodeToBuildRuleTransformer;
 import com.facebook.buck.core.util.graph.MutableDirectedGraph;
 import com.facebook.buck.io.filesystem.ProjectFilesystem;
 import com.facebook.buck.io.filesystem.impl.FakeProjectFilesystem;
 import com.facebook.buck.rules.coercer.DefaultTypeCoercerFactory;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
@@ -93,7 +94,7 @@ public class RuleAnalysisCompatibleDelegatingActionGraphBuilderTest {
                 key -> {
                   fail("should not call RuleAnalysisComputation");
                   return ImmutableFakeRuleAnalysisResultImpl.of(
-                      target, ProviderInfoCollectionImpl.builder().build(), ImmutableMap.of());
+                      target, TestProviderInfoCollectionImpl.builder().build(), ImmutableMap.of());
                 }));
 
     assertSame(expectedRule, builder.requireRule(target));
@@ -108,7 +109,7 @@ public class RuleAnalysisCompatibleDelegatingActionGraphBuilderTest {
           @Override
           public ProviderInfoCollection ruleImpl(
               RuleAnalysisContext context, BuildTarget target, FakeRuleDescriptionArg args) {
-            return ProviderInfoCollectionImpl.builder().build();
+            return TestProviderInfoCollectionImpl.builder().build();
           }
 
           @Override
@@ -166,7 +167,8 @@ public class RuleAnalysisCompatibleDelegatingActionGraphBuilderTest {
 
                   FakeAction.FakeActionExecuteLambda actionFunction =
                       (ignored, ignored2, ignored3) ->
-                          ImmutableActionExecutionSuccess.of(Optional.empty(), Optional.empty());
+                          ImmutableActionExecutionSuccess.of(
+                              Optional.empty(), Optional.empty(), ImmutableList.of());
 
                   new FakeAction(
                       actionRegistry, ImmutableSet.of(), ImmutableSet.of(artifact), actionFunction);
@@ -176,7 +178,7 @@ public class RuleAnalysisCompatibleDelegatingActionGraphBuilderTest {
 
                   return ImmutableFakeRuleAnalysisResultImpl.of(
                       target,
-                      ProviderInfoCollectionImpl.builder().build(),
+                      TestProviderInfoCollectionImpl.builder().build(),
                       ImmutableMap.of(actionAnalysisData.getKey().getID(), actionAnalysisData));
                 }));
 
@@ -193,7 +195,7 @@ public class RuleAnalysisCompatibleDelegatingActionGraphBuilderTest {
 
     RuleAnalysisResult ruleAnalysisResult =
         ImmutableFakeRuleAnalysisResultImpl.of(
-            target, ProviderInfoCollectionImpl.builder().build(), ImmutableMap.of());
+            target, TestProviderInfoCollectionImpl.builder().build(), ImmutableMap.of());
 
     RuleAnalysisCompatibleDelegatingActionGraphBuilder builder =
         new RuleAnalysisCompatibleDelegatingActionGraphBuilder(

@@ -18,6 +18,7 @@ package com.facebook.buck.event.listener;
 
 import com.facebook.buck.artifact_cache.ArtifactCacheEvent;
 import com.facebook.buck.core.model.BuildId;
+import com.facebook.buck.core.model.BuildTarget;
 import com.facebook.buck.core.test.event.TestRunEvent;
 import com.facebook.buck.core.test.event.TestStatusMessageEvent;
 import com.facebook.buck.core.test.event.TestSummaryEvent;
@@ -40,6 +41,7 @@ import com.facebook.buck.event.listener.stats.cache.CacheRateStatsKeeper;
 import com.facebook.buck.event.listener.stats.cache.CacheRateStatsKeeper.CacheRateStatsUpdateEvent;
 import com.facebook.buck.event.listener.stats.stampede.DistBuildTrackedStatus;
 import com.facebook.buck.event.listener.util.EventInterval;
+import com.facebook.buck.remoteexecution.event.RemoteExecutionActionEvent;
 import com.facebook.buck.step.StepEvent;
 import com.facebook.buck.test.TestResultSummary;
 import com.facebook.buck.test.TestResults;
@@ -59,8 +61,6 @@ import com.google.common.collect.Maps;
 import com.google.common.eventbus.Subscribe;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
@@ -70,7 +70,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TimeZone;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentMap;
@@ -89,12 +88,16 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
    */
   private static final int EXPECTED_MAXIMUM_RENDERED_LINE_LENGTH = 128;
 
+  private static final StringBuilder LINE_BUILDER =
+      new StringBuilder(EXPECTED_MAXIMUM_RENDERED_LINE_LENGTH);
+
   private static final Logger LOG = Logger.get(SuperConsoleEventBusListener.class);
 
   private final Locale locale;
   private final Function<Long, String> formatTimeFunction;
 
   private final ConcurrentMap<Long, ConcurrentLinkedDeque<LeafEvent>> threadsToRunningStep;
+  private final ConcurrentMap<BuildTarget, RemoteExecutionActionEvent.Started> eventsByTargets;
 
   private final ConcurrentMap<Long, Optional<? extends TestSummaryEvent>>
       threadsToRunningTestSummaryEvent;
@@ -125,6 +128,7 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
   private final int threadLineLimitOnError;
   private final boolean shouldAlwaysSortThreadsByTime;
   private final long buildRuleMinimumDurationMillis;
+  private final int maxConcurrentReExecutions;
 
   // Save if Watchman reported zero file changes in case we receive an ActionGraphProvider hit. This
   // way the user can know that their changes, if they made any, were not picked up from Watchman.
@@ -158,12 +162,12 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
       ExecutionEnvironment executionEnvironment,
       Locale locale,
       Path testLogPath,
-      TimeZone timeZone,
       BuildId buildId,
       boolean printBuildId,
       Optional<String> buildDetailsTemplate,
       ImmutableSet<String> buildDetailsCommands,
-      ImmutableList<AdditionalConsoleLineProvider> additionalConsoleLineProviders) {
+      ImmutableList<AdditionalConsoleLineProvider> additionalConsoleLineProviders,
+      int maxConcurrentReExecutions) {
     this(
         config,
         renderingConsole,
@@ -172,7 +176,6 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
         executionEnvironment,
         locale,
         testLogPath,
-        timeZone,
         500L,
         500L,
         1000L,
@@ -181,7 +184,8 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
         printBuildId,
         buildDetailsTemplate,
         buildDetailsCommands,
-        additionalConsoleLineProviders);
+        additionalConsoleLineProviders,
+        maxConcurrentReExecutions);
   }
 
   @VisibleForTesting
@@ -193,7 +197,6 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
       ExecutionEnvironment executionEnvironment,
       Locale locale,
       Path testLogPath,
-      TimeZone timeZone,
       long minimumDurationMillisecondsToShowParse,
       long minimumDurationMillisecondsToShowActionGraph,
       long minimumDurationMillisecondsToShowWatchman,
@@ -202,7 +205,8 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
       boolean printBuildId,
       Optional<String> buildDetailsTemplate,
       ImmutableSet<String> buildDetailsCommands,
-      ImmutableList<AdditionalConsoleLineProvider> additionalConsoleLineProviders) {
+      ImmutableList<AdditionalConsoleLineProvider> additionalConsoleLineProviders,
+      int maxConcurrentReExecutions) {
     super(
         renderingConsole,
         clock,
@@ -220,6 +224,7 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
     this.threadsToRunningTestStatusMessageEvent =
         new ConcurrentHashMap<>(executionEnvironment.getAvailableCores());
     this.threadsToRunningStep = new ConcurrentHashMap<>(executionEnvironment.getAvailableCores());
+    this.eventsByTargets = new ConcurrentHashMap<>();
 
     this.testFormatter =
         new TestResultFormatter(
@@ -241,9 +246,6 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
         minimumDurationMillisecondsToShowActionGraph;
     this.minimumDurationMillisecondsToShowWatchman = minimumDurationMillisecondsToShowWatchman;
     this.hideEmptyDownload = hideEmptyDownload;
-
-    DateFormat dateFormat = new SimpleDateFormat("[yyyy-MM-dd HH:mm:ss.SSS]", this.locale);
-    dateFormat.setTimeZone(timeZone);
 
     int outputMaxColumns = 80;
     if (config.getThreadLineOutputMaxColumns().isPresent()) {
@@ -272,6 +274,7 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
     this.renderingConsole = renderingConsole;
     this.renderingConsole.registerDelegate(this::createRenderLinesAtTime);
     this.renderingConsole.startRenderScheduler();
+    this.maxConcurrentReExecutions = maxConcurrentReExecutions;
   }
 
   /**
@@ -371,7 +374,7 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
             new DistBuildSlaveStateRenderer(
                 ansi, currentTimeMillis, distStatsTracker.getSlaveStatuses());
 
-        renderLines(renderer, lines, maxThreadLines, true);
+        renderLinesWithMaybeCompression(renderer, lines, maxThreadLines, true);
       }
     }
 
@@ -424,7 +427,21 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
               buildRuleMinimumDurationMillis,
               getCurrentThreadsToStep(),
               buildRuleThreadTracker);
-      renderLines(renderer, lines, maxThreadLines, shouldAlwaysSortThreadsByTime);
+      int numLinesRenderedFromLocalBuild =
+          renderLinesWithMaybeCompression(
+              renderer, lines, maxThreadLines, shouldAlwaysSortThreadsByTime);
+      renderLinesWithMaybeTruncation(
+          numLinesRenderedFromLocalBuild,
+          new RemoteExecutionStateRenderer(
+              ansi,
+              formatTimeFunction,
+              currentTimeMillis,
+              outputMaxColumns,
+              buildRuleMinimumDurationMillis,
+              maxConcurrentReExecutions,
+              ImmutableList.copyOf(eventsByTargets.values())),
+          lines,
+          maxThreadLines);
     }
 
     long testRunTime =
@@ -450,7 +467,8 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
               threadsToRunningTestStatusMessageEvent,
               getCurrentThreadsToStep(),
               buildRuleThreadTracker);
-      renderLines(renderer, lines, maxThreadLines, shouldAlwaysSortThreadsByTime);
+      renderLinesWithMaybeCompression(
+          renderer, lines, maxThreadLines, shouldAlwaysSortThreadsByTime);
     }
 
     logEventInterval(
@@ -570,11 +588,16 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
   }
 
   /**
-   * Render lines using the provided {@param renderer}.
+   * Returns the number of lines created. If the number of lines to be created exceeds the given
+   * {@code maxLines}, compress the extraneous lines into a single line. See also {@code
+   * #renderLinesWithMaybeTruncation}.
    *
-   * @return the number of lines created.
+   * @param renderer the renderer to use for rendering lines
+   * @param lines the builder to add the rendered lines to
+   * @param maxLines the maximum number of lines to render
+   * @param alwaysSortByTime true if the rendered lines should be sorted by time
    */
-  public int renderLines(
+  public int renderLinesWithMaybeCompression(
       MultiStateRenderer renderer,
       ImmutableList.Builder<String> lines,
       int maxLines,
@@ -590,33 +613,59 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
     }
     int threadsWithShortStatus = threadCount - fullLines;
     boolean sortByTime = alwaysSortByTime || useCompressedLine;
-    ImmutableList<Long> threadIds = renderer.getSortedExecutorIds(sortByTime);
-    StringBuilder lineBuilder = new StringBuilder(EXPECTED_MAXIMUM_RENDERED_LINE_LENGTH);
+    ImmutableList<Long> threadIds = renderer.getSortedIds(sortByTime);
     for (int i = 0; i < fullLines; ++i) {
       long threadId = threadIds.get(i);
-      lineBuilder.delete(0, lineBuilder.length());
-      lines.add(renderer.renderStatusLine(threadId, lineBuilder));
+      lines.add(renderer.renderStatusLine(threadId));
       numLinesRendered++;
     }
     if (useCompressedLine) {
-      lineBuilder.delete(0, lineBuilder.length());
-      lineBuilder.append(" - ");
-      lineBuilder.append(threadsWithShortStatus);
+      LINE_BUILDER.setLength(0);
+      LINE_BUILDER.append(" - ");
+      LINE_BUILDER.append(threadsWithShortStatus);
       if (fullLines == 0) {
-        lineBuilder.append(String.format(" %s:", renderer.getExecutorCollectionLabel()));
+        LINE_BUILDER.append(String.format(" %s:", renderer.getExecutorCollectionLabel()));
       } else {
-        lineBuilder.append(String.format(" MORE %s:", renderer.getExecutorCollectionLabel()));
+        LINE_BUILDER.append(String.format(" MORE %s:", renderer.getExecutorCollectionLabel()));
       }
       for (int i = fullLines; i < threadIds.size(); ++i) {
         long threadId = threadIds.get(i);
-        lineBuilder.append(" ");
-        lineBuilder.append(renderer.renderShortStatus(threadId));
+        LINE_BUILDER.append(" ");
+        LINE_BUILDER.append(renderer.renderShortStatus(threadId));
       }
-      lines.add(lineBuilder.toString());
+      lines.add(LINE_BUILDER.toString());
       numLinesRendered++;
     }
 
     return numLinesRendered;
+  }
+
+  /**
+   * Returns the number of lines created. If the number of lines to be created exceeds the given
+   * {@code maxLines}, return early and ignore the other lines that were to be rendered. See also
+   * {@code #renderLinesWithMaybeCompression}.
+   *
+   * @param numLinesAlreadyRendered the number of lines already previously rendered; used to
+   *     calculate if {@code maxLines} has been reached
+   * @param renderer the renderer to use for rendering lines
+   * @param lines the builder to add the rendered lines to
+   * @param maxLines the maximum number of lines to render
+   */
+  public int renderLinesWithMaybeTruncation(
+      int numLinesAlreadyRendered,
+      MultiStateRenderer renderer,
+      ImmutableList.Builder<String> lines,
+      int maxLines) {
+    int numNewLinesRendered = 0;
+    for (long id : renderer.getSortedIds(/* sortByTime= */ false)) {
+      if (numLinesAlreadyRendered + numNewLinesRendered >= maxLines) {
+        return numNewLinesRendered;
+      }
+      lines.add(renderer.renderStatusLine(id));
+      numNewLinesRendered++;
+    }
+
+    return numNewLinesRendered;
   }
 
   private Optional<String> renderTestSuffix() {
@@ -915,6 +964,16 @@ public class SuperConsoleEventBusListener extends AbstractConsoleEventBusListene
   @SuppressWarnings("unused")
   public void envVariableChange(ParsingEvent.EnvVariableChange event) {
     printInfoDirectlyOnce("Action graph will be rebuilt because environment variables changed.");
+  }
+
+  @Subscribe
+  public void onActionEventStarted(RemoteExecutionActionEvent.Started event) {
+    eventsByTargets.put(event.getBuildTarget(), event);
+  }
+
+  @Subscribe
+  public void onActionEventTerminated(RemoteExecutionActionEvent.Terminal event) {
+    eventsByTargets.remove(event.getBuildTarget());
   }
 
   @Override

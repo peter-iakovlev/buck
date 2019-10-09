@@ -67,6 +67,7 @@ import com.facebook.buck.test.result.type.ResultType;
 import com.facebook.buck.util.Threads;
 import com.facebook.buck.util.concurrent.MoreFutures;
 import com.facebook.buck.util.types.Either;
+import com.facebook.buck.util.types.Unit;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Charsets;
 import com.google.common.base.Preconditions;
@@ -324,7 +325,7 @@ public class TestRunning {
     List<TestResults> completedResults = new ArrayList<>();
 
     ListeningExecutorService directExecutorService = MoreExecutors.newDirectExecutorService();
-    ListenableFuture<Void> uberFuture =
+    ListenableFuture<Unit> uberFuture =
         MoreFutures.addListenableCallback(
             parallelTestStepsFuture,
             new FutureCallback<List<TestResults>>() {
@@ -559,7 +560,7 @@ public class TestRunning {
   }
 
   /** Generates the set of Java library rules under test. */
-  private static ImmutableSet<JavaLibrary> getRulesUnderTest(Iterable<TestRule> tests) {
+  static ImmutableSet<JavaLibrary> getRulesUnderTest(Iterable<TestRule> tests) {
     ImmutableSet.Builder<JavaLibrary> rulesUnderTest = ImmutableSet.builder();
 
     // Gathering all rules whose source will be under test.
@@ -735,7 +736,10 @@ public class TestRunning {
 
       if (useIntermediateClassesDir) {
         classesItem = CompilerOutputPaths.getClassesDir(rule.getBuildTarget(), filesystem);
-      } else {
+      }
+      // If we aren't configured to use the classes dir on disk, or it wasn't part of this
+      // compilation run, then we'll need to unzip the output jar to get access to the classes
+      if (classesItem == null || !filesystem.isDirectory(classesItem)) {
         SourcePath path = rule.getSourcePathToOutput();
         if (path != null) {
           classesItem = ruleFinder.getSourcePathResolver().getRelativePath(path);

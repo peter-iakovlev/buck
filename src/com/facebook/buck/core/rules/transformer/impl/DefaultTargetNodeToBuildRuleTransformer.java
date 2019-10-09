@@ -16,6 +16,7 @@
 
 package com.facebook.buck.core.rules.transformer.impl;
 
+import com.facebook.buck.core.description.arg.ConstructorArg;
 import com.facebook.buck.core.exceptions.BuckUncheckedExecutionException;
 import com.facebook.buck.core.model.BuildTarget;
 import com.facebook.buck.core.model.targetgraph.TargetGraph;
@@ -27,6 +28,7 @@ import com.facebook.buck.core.rules.BuildRuleParams;
 import com.facebook.buck.core.rules.DescriptionWithTargetGraph;
 import com.facebook.buck.core.rules.ImmutableBuildRuleCreationContextWithTargetGraph;
 import com.facebook.buck.core.rules.config.registry.ConfigurationRuleRegistry;
+import com.facebook.buck.core.rules.providers.collect.ProviderInfoCollection;
 import com.facebook.buck.core.rules.transformer.TargetNodeToBuildRuleTransformer;
 import com.facebook.buck.core.toolchain.ToolchainProvider;
 import com.facebook.buck.rules.query.QueryCache;
@@ -44,12 +46,13 @@ public class DefaultTargetNodeToBuildRuleTransformer implements TargetNodeToBuil
   }
 
   @Override
-  public <T> BuildRule transform(
+  public <T extends ConstructorArg> BuildRule transform(
       ToolchainProvider toolchainProvider,
       TargetGraph targetGraph,
       ConfigurationRuleRegistry configurationRuleRegistry,
       ActionGraphBuilder graphBuilder,
-      TargetNode<T> targetNode) {
+      TargetNode<T> targetNode,
+      ProviderInfoCollection providerInfoCollection) {
     try {
       Preconditions.checkState(
           targetNode.getDescription() instanceof DescriptionWithTargetGraph,
@@ -95,7 +98,8 @@ public class DefaultTargetNodeToBuildRuleTransformer implements TargetNodeToBuil
               targetNode.getFilesystem(),
               targetNode.getCellNames(),
               toolchainProvider,
-              configurationRuleRegistry);
+              configurationRuleRegistry,
+              providerInfoCollection);
 
       return description.createBuildRule(context, targetNode.getBuildTarget(), params, arg);
     } catch (Exception e) {

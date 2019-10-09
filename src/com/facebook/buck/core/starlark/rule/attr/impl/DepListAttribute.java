@@ -18,10 +18,10 @@ package com.facebook.buck.core.starlark.rule.attr.impl;
 import com.facebook.buck.core.model.BuildTarget;
 import com.facebook.buck.core.parser.buildtargetparser.ParsingUnconfiguredBuildTargetViewFactory;
 import com.facebook.buck.core.rules.providers.Provider;
-import com.facebook.buck.core.rules.providers.ProviderInfoCollection;
-import com.facebook.buck.core.rules.providers.SkylarkDependency;
+import com.facebook.buck.core.rules.providers.collect.ProviderInfoCollection;
 import com.facebook.buck.core.starlark.rule.attr.Attribute;
 import com.facebook.buck.core.starlark.rule.attr.PostCoercionTransform;
+import com.facebook.buck.core.starlark.rule.data.SkylarkDependency;
 import com.facebook.buck.core.util.immutables.BuckStyleValue;
 import com.facebook.buck.rules.coercer.BuildTargetTypeCoercer;
 import com.facebook.buck.rules.coercer.CoerceFailedException;
@@ -91,9 +91,10 @@ public abstract class DepListAttribute extends Attribute<ImmutableList<BuildTarg
     ImmutableList.Builder<SkylarkDependency> builder =
         ImmutableList.builderWithExpectedSize(listValue.size());
     for (Object target : listValue) {
-      SkylarkDependency dependency = DepAttribute.getDependencyForTargetFromDeps(target, deps);
+      SkylarkDependency dependency =
+          SkylarkDependencyResolver.getDependencyForTargetFromDeps(target, deps);
       validateProvidersPresent(getProviders(), (BuildTarget) target, dependency.getProviderInfos());
-      builder.add(DepAttribute.getDependencyForTargetFromDeps(target, deps));
+      builder.add(SkylarkDependencyResolver.getDependencyForTargetFromDeps(target, deps));
     }
     return builder.build();
   }

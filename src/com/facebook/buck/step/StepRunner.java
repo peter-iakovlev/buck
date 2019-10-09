@@ -19,6 +19,7 @@ package com.facebook.buck.step;
 import com.facebook.buck.core.build.execution.context.ExecutionContext;
 import com.facebook.buck.core.model.BuildTarget;
 import com.facebook.buck.core.util.log.Logger;
+import com.google.common.collect.ImmutableList;
 import java.io.IOException;
 import java.util.Optional;
 import java.util.UUID;
@@ -49,11 +50,8 @@ public final class StepRunner {
     String stepDescription = step.getDescription(context);
     UUID stepUuid = UUID.randomUUID();
     StepEvent.Started started = StepEvent.started(stepShortName, stepDescription, stepUuid);
-    if (LOG.isVerboseEnabled()) {
-      LOG.verbose(
-          "%s for build rule <%s>",
-          started, buildTarget.isPresent() ? buildTarget.get().getFullyQualifiedName() : "N/A");
-    }
+    String buildTargetName = buildTarget.map(BuildTarget::getFullyQualifiedName).orElse("N/A");
+    logStepEvent(context, started, buildTargetName);
     context.getBuckEventBus().post(started);
     StepExecutionResult executionResult = StepExecutionResults.ERROR;
     try {
@@ -62,15 +60,32 @@ public final class StepRunner {
       throw StepFailedException.createForFailingStepWithException(step, context, e);
     } finally {
       StepEvent.Finished finished = StepEvent.finished(started, executionResult.getExitCode());
-      if (LOG.isVerboseEnabled()) {
-        LOG.verbose(
-            "%s for build rule <%s>",
-            finished, buildTarget.isPresent() ? buildTarget.get().getFullyQualifiedName() : "N/A");
-      }
+      logStepEvent(context, finished, buildTargetName, executionResult.getExecutedCommand());
       context.getBuckEventBus().post(finished);
     }
     if (!executionResult.isSuccess()) {
       throw StepFailedException.createForFailingStepWithExitCode(step, context, executionResult);
+    }
+  }
+
+  private static void logStepEvent(
+      ExecutionContext context, StepEvent stepEvent, String buildTargetName) {
+    logStepEvent(context, stepEvent, buildTargetName, ImmutableList.of());
+  }
+
+  private static void logStepEvent(
+      ExecutionContext context,
+      StepEvent stepEvent,
+      String buildTargetName,
+      ImmutableList<String> command) {
+    if (command.isEmpty()) {
+      LOG.verbose("%s for build rule <%s>", stepEvent, buildTargetName);
+    } else {
+      LOG.verbose(
+          "%s for build rule <%s>, executed command: %s", stepEvent, buildTargetName, command);
+      if (context.getVerbosity().shouldPrintCommand()) {
+        context.getStdErr().println(command);
+      }
     }
   }
 }

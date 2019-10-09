@@ -21,8 +21,9 @@ import static org.hamcrest.junit.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 
-import com.facebook.buck.apple.clang.ModuleMap;
-import com.facebook.buck.apple.clang.ModuleMap.SwiftMode;
+import com.facebook.buck.apple.clang.ModuleMapMode;
+import com.facebook.buck.apple.clang.UmbrellaHeaderModuleMap;
+import com.facebook.buck.apple.clang.UmbrellaHeaderModuleMap.SwiftMode;
 import com.facebook.buck.core.build.buildable.context.FakeBuildableContext;
 import com.facebook.buck.core.build.context.BuildContext;
 import com.facebook.buck.core.build.context.FakeBuildContext;
@@ -108,7 +109,7 @@ public class HeaderSymlinkTreeWithModuleMapTest {
     // Setup the symlink tree buildable.
     symlinkTreeBuildRule =
         HeaderSymlinkTreeWithModuleMap.create(
-            buildTarget, projectFilesystem, symlinkTreeRoot, links);
+            buildTarget, projectFilesystem, symlinkTreeRoot, links, ModuleMapMode.UMBRELLA_HEADER);
   }
 
   @Test
@@ -133,7 +134,7 @@ public class HeaderSymlinkTreeWithModuleMapTest {
                     projectFilesystem,
                     BuildTargetPaths.getGenPath(
                         projectFilesystem, buildTarget, "%s/SomeModule/module.modulemap"),
-                    new ModuleMap("SomeModule", SwiftMode.NO_SWIFT)))
+                    new UmbrellaHeaderModuleMap("SomeModule", SwiftMode.NO_SWIFT)))
             .build();
     ImmutableList<Step> actualBuildSteps =
         symlinkTreeBuildRule.getBuildSteps(buildContext, buildableContext);
@@ -151,7 +152,8 @@ public class HeaderSymlinkTreeWithModuleMapTest {
             projectFilesystem,
             symlinkTreeRoot,
             ImmutableMap.of(
-                Paths.get("SomeModule", "SomeModule-Swift.h"), FakeSourcePath.of("SomeModule")));
+                Paths.get("SomeModule", "SomeModule-Swift.h"), FakeSourcePath.of("SomeModule")),
+            ModuleMapMode.UMBRELLA_HEADER);
 
     ImmutableList<Step> actualBuildSteps =
         linksWithSwiftHeader.getBuildSteps(buildContext, buildableContext);
@@ -161,7 +163,7 @@ public class HeaderSymlinkTreeWithModuleMapTest {
             projectFilesystem,
             BuildTargetPaths.getGenPath(
                 projectFilesystem, buildTarget, "%s/SomeModule/module.modulemap"),
-            new ModuleMap("SomeModule", SwiftMode.INCLUDE_SWIFT_HEADER));
+            new UmbrellaHeaderModuleMap("SomeModule", SwiftMode.INCLUDE_SWIFT_HEADER));
     assertThat(actualBuildSteps, hasItem(moduleMapStep));
   }
 
@@ -177,7 +179,8 @@ public class HeaderSymlinkTreeWithModuleMapTest {
             ImmutableMap.of(
                 Paths.get("OtherModule", "Header.h"),
                 PathSourcePath.of(
-                    projectFilesystem, MorePaths.relativize(tmpDir.getRoot(), aFile))));
+                    projectFilesystem, MorePaths.relativize(tmpDir.getRoot(), aFile))),
+            ModuleMapMode.UMBRELLA_HEADER);
 
     // Calculate their rule keys and verify they're different.
     DefaultFileHashCache hashCache =

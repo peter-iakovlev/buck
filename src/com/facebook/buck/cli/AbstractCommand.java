@@ -77,6 +77,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ScheduledExecutorService;
 import javax.annotation.Nullable;
 import org.kohsuke.args4j.CmdLineException;
@@ -164,8 +165,7 @@ public abstract class AbstractCommand extends CommandWithPluginManager {
 
   @Option(
       name = GlobalCliOptions.EXCLUDE_INCOMPATIBLE_TARGETS_LONG_ARG,
-      usage =
-          "Exclude targets that are not compatible with the given target platform. (experimental)")
+      usage = "This option is ignored")
   private boolean excludeIncompatibleTargets = false;
 
   @Option(name = GlobalCliOptions.HELP_LONG_ARG, usage = "Prints the available options and exits.")
@@ -282,9 +282,13 @@ public abstract class AbstractCommand extends CommandWithPluginManager {
                 outputStream,
                 Format.JSON_TRACE_FILE_FORMAT,
                 "Buck profile for " + skylarkProfile + " at " + LocalDate.now(),
+                "buck",
+                UUID.nameUUIDFromBytes(new byte[0]),
                 false,
                 clock,
                 clock.nanoTime(),
+                false,
+                false,
                 false);
       } catch (IOException e) {
         throw new HumanReadableException(
@@ -423,7 +427,12 @@ public abstract class AbstractCommand extends CommandWithPluginManager {
   }
 
   public boolean getExcludeIncompatibleTargets() {
-    return excludeIncompatibleTargets;
+    // Exclude platform-incompatible target because
+    // this is generally what Buck users want.
+    // But keep the function virtual because
+    // `uquery` command (and probably others in the future)
+    // do not need target filtering by design.
+    return true;
   }
 
   /**

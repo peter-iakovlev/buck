@@ -108,7 +108,13 @@ class AbiFilteringClassVisitor extends ClassVisitor {
   @Nullable
   public MethodVisitor visitMethod(
       int access, String name, String desc, String signature, String[] exceptions) {
-    if (methodsWithRetainedBody.contains(name)) {
+    if (methodsWithRetainedBody.contains(name)
+        || (name.endsWith("$default")
+            && methodsWithRetainedBody.contains(name.substring(0, name.length() - 8)))) {
+      if (name.equals("<init>") && (access & (Opcodes.ACC_PRIVATE | Opcodes.ACC_SYNTHETIC)) == 0) {
+        hasVisibleConstructor = true;
+      }
+
       return super.visitMethod(access, name, desc, signature, exceptions);
     }
 

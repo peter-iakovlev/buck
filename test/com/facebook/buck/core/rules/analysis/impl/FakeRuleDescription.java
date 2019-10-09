@@ -24,12 +24,15 @@ import com.facebook.buck.core.rules.actions.FakeAction;
 import com.facebook.buck.core.rules.actions.ImmutableActionExecutionFailure;
 import com.facebook.buck.core.rules.actions.ImmutableActionExecutionSuccess;
 import com.facebook.buck.core.rules.analysis.RuleAnalysisContext;
-import com.facebook.buck.core.rules.providers.ProviderInfoCollection;
-import com.facebook.buck.core.rules.providers.impl.ProviderInfoCollectionImpl;
+import com.facebook.buck.core.rules.providers.collect.ProviderInfoCollection;
+import com.facebook.buck.core.rules.providers.collect.impl.TestProviderInfoCollectionImpl;
+import com.facebook.buck.core.rules.providers.lib.ImmutableDefaultInfo;
 import com.facebook.buck.core.util.immutables.BuckStyleImmutable;
 import com.google.common.base.Charsets;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.syntax.SkylarkDict;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Paths;
@@ -54,14 +57,16 @@ public class FakeRuleDescription implements RuleDescription<FakeRuleDescriptionA
             }
           } catch (IOException e) {
             return ImmutableActionExecutionFailure.of(
-                Optional.empty(), Optional.empty(), Optional.of(e));
+                Optional.empty(), Optional.empty(), ImmutableList.of(), Optional.of(e));
           }
-          return ImmutableActionExecutionSuccess.of(Optional.empty(), Optional.empty());
+          return ImmutableActionExecutionSuccess.of(
+              Optional.empty(), Optional.empty(), ImmutableList.of());
         };
 
     new FakeAction(
         context.actionRegistry(), ImmutableSet.of(), ImmutableSet.of(artifact), actionExecution);
-    return ProviderInfoCollectionImpl.builder().build();
+    return TestProviderInfoCollectionImpl.builder()
+        .build(new ImmutableDefaultInfo(SkylarkDict.empty(), ImmutableList.of()));
   }
 
   @Override

@@ -941,6 +941,18 @@ public class AppleLibraryIntegrationTest {
     testModularScenario("apple_library_modular_swift_uses_objc_same_lib", "Mixed");
   }
 
+  @Test
+  public void testBuildAppleLibraryWhereModularSwiftUsesUmbrellaDirectoryModuleMap()
+      throws Exception {
+    testModularScenario("umbrella_directory_modulemap", "Test");
+  }
+
+  @Test
+  public void testBuildAppleLibraryWhereModularSwiftUsesPerLibraryUmbrellaDirectoryModuleMap()
+      throws Exception {
+    testModularScenario("umbrella_directory_modulemap_per_library", "Test");
+  }
+
   private void testModularScenario(String scenario, String targetName) throws Exception {
     assumeTrue(Platform.detect() == Platform.MACOS);
     assumeTrue(AppleNativeIntegrationTestUtils.isApplePlatformAvailable(ApplePlatform.MACOSX));

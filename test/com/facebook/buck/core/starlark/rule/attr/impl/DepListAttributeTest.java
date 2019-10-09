@@ -27,11 +27,12 @@ import com.facebook.buck.core.model.EmptyTargetConfiguration;
 import com.facebook.buck.core.rules.actions.ActionRegistryForTests;
 import com.facebook.buck.core.rules.analysis.impl.FakeBuiltInProvider;
 import com.facebook.buck.core.rules.analysis.impl.FakeInfo;
-import com.facebook.buck.core.rules.providers.ProviderInfoCollection;
-import com.facebook.buck.core.rules.providers.SkylarkDependency;
-import com.facebook.buck.core.rules.providers.impl.ProviderInfoCollectionImpl;
+import com.facebook.buck.core.rules.providers.collect.ProviderInfoCollection;
+import com.facebook.buck.core.rules.providers.collect.impl.ProviderInfoCollectionImpl;
+import com.facebook.buck.core.rules.providers.collect.impl.TestProviderInfoCollectionImpl;
 import com.facebook.buck.core.rules.providers.lib.DefaultInfo;
 import com.facebook.buck.core.rules.providers.lib.ImmutableDefaultInfo;
+import com.facebook.buck.core.starlark.rule.data.SkylarkDependency;
 import com.facebook.buck.io.filesystem.impl.FakeProjectFilesystem;
 import com.facebook.buck.rules.coercer.CoerceFailedException;
 import com.google.common.base.VerifyException;
@@ -174,7 +175,7 @@ public class DepListAttributeTest {
             coerced,
             ImmutableMap.of(
                 BuildTargetFactory.newInstance("//foo:bar"),
-                ProviderInfoCollectionImpl.builder().put(info).build()));
+                TestProviderInfoCollectionImpl.builder().put(info).build()));
   }
 
   @Test
@@ -200,9 +201,9 @@ public class DepListAttributeTest {
     ImmutableMap<BuildTarget, ProviderInfoCollection> deps =
         ImmutableMap.of(
             dep1,
-            ProviderInfoCollectionImpl.builder().put(defaultInfo1).build(),
+            ProviderInfoCollectionImpl.builder().build(defaultInfo1),
             dep2,
-            ProviderInfoCollectionImpl.builder().put(defaultInfo2).build());
+            ProviderInfoCollectionImpl.builder().build(defaultInfo2));
 
     ImmutableList<BuildTarget> coerced =
         attr.getValue(

@@ -20,6 +20,7 @@ import com.facebook.buck.android.AndroidBinaryDescription;
 import com.facebook.buck.android.AndroidInstrumentationApkDescription;
 import com.facebook.buck.android.AndroidInstrumentationTestDescription;
 import com.facebook.buck.android.AndroidManifestDescription;
+import com.facebook.buck.core.description.arg.ConstructorArg;
 import com.facebook.buck.core.model.targetgraph.TargetGraph;
 import com.facebook.buck.core.model.targetgraph.TargetNode;
 import com.facebook.buck.core.rules.ActionGraphBuilder;
@@ -29,6 +30,7 @@ import com.facebook.buck.core.rules.BuildRuleParams;
 import com.facebook.buck.core.rules.DescriptionWithTargetGraph;
 import com.facebook.buck.core.rules.ImmutableBuildRuleCreationContextWithTargetGraph;
 import com.facebook.buck.core.rules.config.registry.ConfigurationRuleRegistry;
+import com.facebook.buck.core.rules.providers.collect.ProviderInfoCollection;
 import com.facebook.buck.core.rules.transformer.TargetNodeToBuildRuleTransformer;
 import com.facebook.buck.core.toolchain.ToolchainProvider;
 import com.facebook.buck.shell.AbstractGenruleDescription;
@@ -57,12 +59,13 @@ public class ShallowTargetNodeToBuildRuleTransformer implements TargetNodeToBuil
   public ShallowTargetNodeToBuildRuleTransformer() {}
 
   @Override
-  public <T> BuildRule transform(
+  public <T extends ConstructorArg> BuildRule transform(
       ToolchainProvider toolchainProvider,
       TargetGraph targetGraph,
       ConfigurationRuleRegistry configurationRuleRegistry,
       ActionGraphBuilder graphBuilder,
-      TargetNode<T> targetNode) {
+      TargetNode<T> targetNode,
+      ProviderInfoCollection providerInfoCollection) {
     DescriptionWithTargetGraph<T> description =
         (DescriptionWithTargetGraph<T>) targetNode.getDescription();
 
@@ -93,7 +96,8 @@ public class ShallowTargetNodeToBuildRuleTransformer implements TargetNodeToBuil
               targetNode.getFilesystem(),
               targetNode.getCellNames(),
               toolchainProvider,
-              configurationRuleRegistry);
+              configurationRuleRegistry,
+              providerInfoCollection);
 
       return description.createBuildRule(context, targetNode.getBuildTarget(), params, arg);
     }

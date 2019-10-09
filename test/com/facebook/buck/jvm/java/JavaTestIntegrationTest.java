@@ -22,6 +22,7 @@ import static org.hamcrest.Matchers.iterableWithSize;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.stringContainsInOrder;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
@@ -399,9 +400,52 @@ public class JavaTestIntegrationTest {
     JsonParser parser = ObjectMappers.createParser(specOutput);
 
     ArrayNode node = parser.readValueAsTree();
-    JsonNode spec = node.get(0);
+    JsonNode spec = node.get(0).get("specs");
 
     assertEquals("spec", spec.get("my").textValue());
+
+    JsonNode other = spec.get("other");
+    assertTrue(other.isArray());
+    assertTrue(other.has(0));
+    assertEquals("stuff", other.get(0).get("complicated").textValue());
+    assertEquals(1, other.get(0).get("integer").intValue());
+    assertEquals(1.2, other.get(0).get("double").doubleValue(), 0);
+    assertTrue(other.get(0).get("boolean").booleanValue());
+
+    String cmd = spec.get("cmd").textValue();
+    DefaultProcessExecutor processExecutor =
+        new DefaultProcessExecutor(Console.createNullConsole());
+    ProcessExecutor.Result processResult =
+        processExecutor.launchAndExecute(
+            ProcessExecutorParams.builder().addCommand(cmd.split(" ")).build());
+    assertEquals(0, processResult.getExitCode());
+  }
+
+  @Test
+  public void testProtocolJavaTestWithJVMArgsRuleShouldBuildAndGenerateSpec() throws Exception {
+    ProjectWorkspace workspace =
+        TestDataHelper.createProjectWorkspaceForScenario(this, "testx_rule", temp);
+    workspace.setUp();
+    workspace.addBuckConfigLocalOption("test", "external_runner", "echo");
+    ProcessResult resultWithJVMArgs = workspace.runBuckCommand("test", "//:some_test_with_jvm");
+    resultWithJVMArgs.assertSuccess();
+    Path specOutput =
+        workspace.getPath(
+            workspace.getBuckPaths().getScratchDir().resolve("external_runner_specs.json"));
+    JsonParser parser = ObjectMappers.createParser(specOutput);
+
+    ArrayNode node = parser.readValueAsTree();
+    JsonNode spec = node.get(0).get("specs");
+
+    assertEquals("spec", spec.get("my").textValue());
+
+    JsonNode other = spec.get("other");
+    assertTrue(other.isArray());
+    assertTrue(other.has(0));
+    assertEquals("stuff", other.get(0).get("complicated").textValue());
+    assertEquals(1, other.get(0).get("integer").intValue());
+    assertEquals(1.2, other.get(0).get("double").doubleValue(), 0);
+    assertFalse(other.get(0).get("boolean").booleanValue());
 
     String cmd = spec.get("cmd").textValue();
     DefaultProcessExecutor processExecutor =

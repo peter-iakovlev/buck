@@ -24,11 +24,12 @@ import com.facebook.buck.core.rules.analysis.RuleAnalysisContext;
 import com.facebook.buck.core.rules.analysis.RuleAnalysisException;
 import com.facebook.buck.core.rules.providers.Provider;
 import com.facebook.buck.core.rules.providers.ProviderInfo;
-import com.facebook.buck.core.rules.providers.ProviderInfoCollection;
 import com.facebook.buck.core.rules.providers.SkylarkProviderInfo;
-import com.facebook.buck.core.rules.providers.impl.ProviderInfoCollectionImpl;
+import com.facebook.buck.core.rules.providers.collect.ProviderInfoCollection;
+import com.facebook.buck.core.rules.providers.collect.impl.ProviderInfoCollectionImpl;
 import com.facebook.buck.core.rules.providers.lib.DefaultInfo;
 import com.facebook.buck.core.rules.providers.lib.ImmutableDefaultInfo;
+import com.facebook.buck.core.starlark.compatible.BuckStarlark;
 import com.facebook.buck.core.starlark.eventhandler.ConsoleEventHandler;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -44,6 +45,7 @@ import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import java.util.HashMap;
 import java.util.List;
+import javax.annotation.Nullable;
 
 /**
  * Description for User Defined Rules. This Description runs user-supplied implementation functions
@@ -73,7 +75,7 @@ public class SkylarkDescription implements RuleDescription<SkylarkDescriptionArg
 
       Environment env =
           Environment.builder(mutability)
-              .useDefaultSemantics()
+              .setSemantics(BuckStarlark.BUCK_STARLARK_SEMANTICS)
               .setEventHandler(
                   new ConsoleEventHandler(
                       context.getEventBus(),
@@ -108,26 +110,27 @@ public class SkylarkDescription implements RuleDescription<SkylarkDescriptionArg
 
     ProviderInfoCollectionImpl.Builder infos = ProviderInfoCollectionImpl.builder();
 
-    boolean foundDefaultInfo = false;
+    @Nullable DefaultInfo suppliedDefaultInfo = null;
     for (SkylarkProviderInfo skylarkInfo : implResult) {
       ProviderInfo<?> info = skylarkInfo.getProviderInfo();
-      if (DefaultInfo.PROVIDER.equals(info.getProvider())) {
-        foundDefaultInfo = true;
+      if (DefaultInfo.PROVIDER.equals(info.getProvider()) && suppliedDefaultInfo == null) {
+        suppliedDefaultInfo = (DefaultInfo) info;
+      } else {
+        infos.put(info);
       }
-      infos.put(info);
     }
-    if (!foundDefaultInfo) {
+    if (suppliedDefaultInfo == null) {
       // TODO: If we have output params set, use those artifacts
       ImmutableSet<Artifact> outputs = declaredOutputs;
       if (outputs.isEmpty()) {
         outputs = ctx.getOutputs();
       }
 
-      infos.put(new ImmutableDefaultInfo(SkylarkDict.empty(), outputs));
+      suppliedDefaultInfo = new ImmutableDefaultInfo(SkylarkDict.empty(), outputs);
     }
 
     try {
-      return infos.build();
+      return infos.build(suppliedDefaultInfo);
     } catch (IllegalArgumentException e) {
       throw new EvalException(
           implementation.getLocation(),

@@ -47,11 +47,6 @@ public class ZipFileDescription
       ZipFileDescriptionArg args) {
 
     ImmutableList<SourcePath> zipSources = args.getZipSrcs();
-    boolean mergeSourceZips = args.getMergeSourceZips();
-
-    if (!zipSources.isEmpty() && mergeSourceZips)
-      throw new IllegalArgumentException(
-          "Illegal to define merge_source_zips when zip_srcs is present in " + buildTarget);
 
     return new Zip(
         context.getActionGraphBuilder(),
@@ -60,8 +55,6 @@ public class ZipFileDescription
         args.getOut(),
         args.getSrcs(),
         zipSources,
-        args.getFlatten(),
-        mergeSourceZips,
         args.getEntriesToExclude(),
         args.getOnDuplicateEntry());
   }
@@ -79,17 +72,7 @@ public class ZipFileDescription
       return getName() + ".zip";
     }
 
-    @Value.Default
-    default boolean getFlatten() {
-      return false;
-    }
-
     ImmutableSet<SourcePath> getSrcs();
-
-    @Value.Default
-    default boolean getMergeSourceZips() {
-      return false;
-    }
 
     ImmutableSet<Pattern> getEntriesToExclude();
 

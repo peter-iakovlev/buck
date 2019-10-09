@@ -45,7 +45,7 @@ import java.nio.file.Path;
 import java.util.function.Function;
 
 /** Creates {@link TargetNode} from {@link RawTargetNode}. */
-public class RawTargetNodeToTargetNodeFactory implements ParserTargetNodeFactory<RawTargetNode> {
+public class RawTargetNodeToTargetNodeFactory implements ParserTargetNodeFromRawTargetNodeFactory {
 
   private final TypeCoercerFactory typeCoercerFactory;
   private final KnownRuleTypesProvider knownRuleTypesProvider;
@@ -120,7 +120,7 @@ public class RawTargetNodeToTargetNodeFactory implements ParserTargetNodeFactory
               declaredDeps,
               configurationDeps,
               rawTargetNode.getAttributes());
-    } catch (CoerceFailedException e) {
+    } catch (HumanReadableException | CoerceFailedException e) {
       throw new HumanReadableException(e, "%s: %s", target, e.getMessage());
     }
 

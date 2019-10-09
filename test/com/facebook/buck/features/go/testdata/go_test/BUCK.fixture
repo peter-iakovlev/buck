@@ -17,10 +17,9 @@ go_library(
     deps = [":base"],
 )
 
-go_library(
+go_test_runner(
     name = "runner",
-    package_name = "main",
-    srcs = ["runner.go"],
+    test_runner_generator = "test_runner_generator.go",
 )
 
 go_test(
@@ -32,9 +31,17 @@ go_test(
         "resources_test.go",
     ],
     resources = ["testdata/input"],
-    runner_library = ":runner",
+    runner = ":runner",
     specs = {
         "my": "spec",
+        "other": [
+            {
+                "complicated": "stuff",
+                "integer": 1,
+                "double": 1.2,
+                "boolean": True,
+            },
+        ],
         "cmd": "out=\"$(abs_output testbin)\" && cd \$(dirname $out) && $out",
     },
     deps = [":base"],

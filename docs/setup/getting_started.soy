@@ -419,13 +419,14 @@ available commands:
   kill        kill buckd for the current project
   killall     kill all buckd processes
   project     generates project configuration files for an IDE
-  query       provides facilities to query information about the target nodes graph
+  query       provides facilities to query information about the configured target nodes graph
   root        prints the absolute path to the root of the current buck project
   run         runs a target as a command
   server      query and control the http server
   targets     prints the list of buildable targets
   test        builds and runs the tests for the specified target
   uninstall   uninstalls an APK
+  uquery      provides facilities to query information about the unconfigured target nodes graph
 options:
  --help         : Shows this screen and exits.
  --version (-V) : Show version number.
@@ -790,7 +791,7 @@ ANDROID_SDK=&lt;path-to-sdk&gt;
 
 <ul>
   <li>See {call buckconfig.android_build_tools_version /} to get the version of build tools in Android SDK.</li>
-  <li>{call buckconfig.android_target /} points to the target.</li>
+  <li>{call buckconfig.android_compile_sdk_version /} points to the Android SDK to build against.</li>
   <li>{call buckconfig.ndk_ndk_version /} points to the version of Android NDK.</li>
 </ul>
 

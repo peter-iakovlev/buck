@@ -25,8 +25,10 @@ import com.facebook.buck.core.rules.actions.ActionExecutionResult;
 import com.facebook.buck.core.rules.actions.ActionRegistry;
 import com.facebook.buck.core.rules.actions.ImmutableActionExecutionFailure;
 import com.facebook.buck.core.rules.actions.ImmutableActionExecutionSuccess;
+import com.facebook.buck.core.rules.actions.lib.args.CommandLine;
 import com.facebook.buck.core.rules.actions.lib.args.CommandLineArgException;
 import com.facebook.buck.core.rules.actions.lib.args.CommandLineArgs;
+import com.facebook.buck.core.rules.actions.lib.args.ExecCompatibleCommandLineBuilder;
 import com.facebook.buck.util.ProcessExecutor;
 import com.facebook.buck.util.ProcessExecutorParams;
 import com.google.common.collect.ImmutableList;
@@ -75,44 +77,49 @@ public class RunAction extends AbstractAction {
   @Override
   public ActionExecutionResult execute(ActionExecutionContext executionContext) {
     ArtifactFilesystem filesystem = executionContext.getArtifactFilesystem();
-    ImmutableList<String> commandLineArgs;
+    CommandLine commandLine;
     try {
-      ImmutableList.Builder<String> builder =
-          ImmutableList.builderWithExpectedSize(args.getEstimatedArgsCount());
-      args.getStrings(filesystem).forEach(builder::add);
-      commandLineArgs = builder.build();
+      commandLine = new ExecCompatibleCommandLineBuilder(filesystem).build(args);
     } catch (CommandLineArgException e) {
-      return ImmutableActionExecutionFailure.of(Optional.empty(), Optional.empty(), Optional.of(e));
+      return ImmutableActionExecutionFailure.of(
+          Optional.empty(), Optional.empty(), ImmutableList.of(), Optional.of(e));
     }
-    if (commandLineArgs.isEmpty()) {
+    if (commandLine.getCommandLineArgs().isEmpty()) {
       return ImmutableActionExecutionFailure.of(
           Optional.empty(),
           Optional.empty(),
+          ImmutableList.of(),
           Optional.of(
               new HumanReadableException(
                   "Zero arguments were provided when invoking run() action")));
     }
 
+    ImmutableList<String> stringifiedCommandLine = commandLine.getCommandLineArgs();
     ProcessExecutorParams params =
         ProcessExecutorParams.builder()
             .setEnvironment(getEnvironment(executionContext))
             .setDirectory(executionContext.getWorkingDirectory())
-            .setCommand(commandLineArgs)
+            .setCommand(stringifiedCommandLine)
             .build();
 
     try {
       ProcessExecutor.Result result =
           executionContext.getProcessExecutor().launchAndExecute(params);
+      Optional<String> stdout = result.getStdout();
+      Optional<String> stderr = result.getStderr();
+      ImmutableList<String> command = result.getCommand();
       if (result.getExitCode() == 0) {
-        return ImmutableActionExecutionSuccess.of(result.getStdout(), result.getStderr());
+        return ImmutableActionExecutionSuccess.of(stdout, stderr, command);
       } else {
         return ImmutableActionExecutionFailure.of(
-            result.getStdout(),
-            result.getStderr(),
+            stdout,
+            stderr,
+            command,
             Optional.of(new ProcessExecutionFailedException(result.getExitCode())));
       }
     } catch (InterruptedException | IOException e) {
-      return ImmutableActionExecutionFailure.of(Optional.empty(), Optional.empty(), Optional.of(e));
+      return ImmutableActionExecutionFailure.of(
+          Optional.empty(), Optional.empty(), stringifiedCommandLine, Optional.of(e));
     }
   }
 

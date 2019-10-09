@@ -87,7 +87,7 @@ public class DistBuildSlaveStateRenderer implements MultiStateRenderer {
   }
 
   @Override
-  public ImmutableList<Long> getSortedExecutorIds(boolean sortByTime) {
+  public ImmutableList<Long> getSortedIds(boolean sortByTime) {
     return IntStream.range(0, slaveStatuses.size())
         .boxed()
         .map(i -> new Pair<>(i, slaveStatuses.get(i)))
@@ -98,8 +98,9 @@ public class DistBuildSlaveStateRenderer implements MultiStateRenderer {
   }
 
   @Override
-  public String renderStatusLine(long slaveID, StringBuilder lineBuilder) {
+  public String renderStatusLine(long slaveID) {
     Preconditions.checkArgument(slaveID >= 0 && slaveID < slaveStatuses.size());
+    StringBuilder lineBuilder = new StringBuilder();
     BuildSlaveStatus status = slaveStatuses.get((int) slaveID);
     lineBuilder.append(" - ");
 

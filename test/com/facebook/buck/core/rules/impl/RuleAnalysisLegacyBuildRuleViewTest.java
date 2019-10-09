@@ -23,6 +23,7 @@ import static org.junit.Assert.assertTrue;
 import com.facebook.buck.core.artifact.Artifact;
 import com.facebook.buck.core.build.buildable.context.FakeBuildableContext;
 import com.facebook.buck.core.build.context.FakeBuildContext;
+import com.facebook.buck.core.description.arg.ConstructorArg;
 import com.facebook.buck.core.model.BuildTarget;
 import com.facebook.buck.core.model.BuildTargetFactory;
 import com.facebook.buck.core.model.impl.BuildPaths;
@@ -45,8 +46,8 @@ import com.facebook.buck.core.rules.analysis.impl.FakeBuiltInProvider;
 import com.facebook.buck.core.rules.analysis.impl.FakeInfo;
 import com.facebook.buck.core.rules.analysis.impl.ImmutableFakeRuleAnalysisResultImpl;
 import com.facebook.buck.core.rules.config.registry.ConfigurationRuleRegistry;
-import com.facebook.buck.core.rules.providers.ProviderInfoCollection;
-import com.facebook.buck.core.rules.providers.impl.ProviderInfoCollectionImpl;
+import com.facebook.buck.core.rules.providers.collect.ProviderInfoCollection;
+import com.facebook.buck.core.rules.providers.collect.impl.TestProviderInfoCollectionImpl;
 import com.facebook.buck.core.rules.resolver.impl.TestActionGraphBuilder;
 import com.facebook.buck.core.rules.transformer.TargetNodeToBuildRuleTransformer;
 import com.facebook.buck.core.sourcepath.ExplicitBuildTargetSourcePath;
@@ -93,12 +94,13 @@ public class RuleAnalysisLegacyBuildRuleViewTest {
             targetGraph,
             new TargetNodeToBuildRuleTransformer() {
               @Override
-              public <T> BuildRule transform(
+              public <T extends ConstructorArg> BuildRule transform(
                   ToolchainProvider toolchainProvider,
                   TargetGraph targetGraph,
                   ConfigurationRuleRegistry configurationRuleRegistry,
                   ActionGraphBuilder graphBuilder,
-                  TargetNode<T> targetNode) {
+                  TargetNode<T> targetNode,
+                  ProviderInfoCollection providerInfoCollection) {
                 assertSame(depNode, targetNode);
                 return fakeDepRule;
               }
@@ -108,7 +110,9 @@ public class RuleAnalysisLegacyBuildRuleViewTest {
     FakeActionAnalysisRegistry actionAnalysisRegistry = new FakeActionAnalysisRegistry();
 
     FakeAction.FakeActionExecuteLambda depActionFunction =
-        (ins, outs, ctx) -> ImmutableActionExecutionSuccess.of(Optional.empty(), Optional.empty());
+        (ins, outs, ctx) ->
+            ImmutableActionExecutionSuccess.of(
+                Optional.empty(), Optional.empty(), ImmutableList.of());
 
     ActionRegistry actionRegistry =
         new DefaultActionRegistry(depTarget, actionAnalysisRegistry, filesystem);
@@ -133,7 +137,8 @@ public class RuleAnalysisLegacyBuildRuleViewTest {
               ExplicitBuildTargetSourcePath.of(buildTarget, packagePath.resolve(outpath)),
               Iterables.getOnlyElement(outs).asBound().getSourcePath());
           functionCalled.set(true);
-          return ImmutableActionExecutionSuccess.of(Optional.empty(), Optional.empty());
+          return ImmutableActionExecutionSuccess.of(
+              Optional.empty(), Optional.empty(), ImmutableList.of());
         };
 
     actionRegistry = new DefaultActionRegistry(buildTarget, actionAnalysisRegistry, filesystem);
@@ -143,7 +148,7 @@ public class RuleAnalysisLegacyBuildRuleViewTest {
         actionRegistry, ImmutableSet.of(depArtifact), ImmutableSet.of(artifact), actionFunction);
 
     ProviderInfoCollection providerInfoCollection =
-        ProviderInfoCollectionImpl.builder()
+        TestProviderInfoCollectionImpl.builder()
             .put(new FakeInfo(new FakeBuiltInProvider("foo")))
             .build();
 
@@ -163,16 +168,18 @@ public class RuleAnalysisLegacyBuildRuleViewTest {
                     .getActionDataKey()
                     .getID());
 
-    BuildRule buildRule =
+    RuleAnalysisLegacyBuildRuleView buildRule =
         new RuleAnalysisLegacyBuildRuleView(
             "my_type",
             ruleAnalysisResult.getBuildTarget(),
             actionWrapperData.getAction(),
             actionGraphBuilder,
-            projectFilesystem);
+            projectFilesystem,
+            providerInfoCollection);
 
     assertSame(buildTarget, buildRule.getBuildTarget());
     assertSame(projectFilesystem, buildRule.getProjectFilesystem());
+    assertSame(providerInfoCollection, buildRule.getProviderInfos());
     assertEquals("my_type", buildRule.getType());
     assertEquals(
         ExplicitBuildTargetSourcePath.of(buildTarget, packagePath.resolve("foo.output")),

@@ -24,7 +24,6 @@ import com.facebook.buck.step.Step;
 import com.facebook.buck.test.TestResults;
 import com.facebook.buck.test.TestRunningOptions;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import java.util.concurrent.Callable;
 import javax.annotation.Nullable;
 
@@ -42,9 +41,11 @@ public interface TestXRule extends TestRule, ExternalTestRunnerRule, HasSuppleme
   }
 
   /** @return the specs from the test protocol defined in BUCK files */
-  ImmutableMap<String, String> getSpecs();
+  CoercedTestRunnerSpec getSpecs();
 
+  /** tests are no longer ran by Buck, so test protocol rules should not have this. */
   @Override
+  @Deprecated
   default ImmutableList<Step> runTests(
       ExecutionContext executionContext,
       TestRunningOptions options,
@@ -53,7 +54,9 @@ public interface TestXRule extends TestRule, ExternalTestRunnerRule, HasSuppleme
     throw shouldNotBeCalled();
   }
 
+  /** tests are no longer ran by Buck, and hence we don't need to interpret the test results */
   @Override
+  @Deprecated
   default Callable<TestResults> interpretTestResults(
       ExecutionContext executionContext,
       SourcePathResolver pathResolver,
@@ -61,25 +64,45 @@ public interface TestXRule extends TestRule, ExternalTestRunnerRule, HasSuppleme
     throw shouldNotBeCalled();
   }
 
+  /**
+   * tests are not ran by Buck. This attribute should be on the test specs for the test runner to
+   * interpret
+   */
   @Override
+  @Deprecated
   default boolean runTestSeparately() {
     return false;
   }
 
+  /**
+   * tests are not ran by Buck. This attribute should be on the test specs for the test runner to
+   * interpret
+   */
   @Override
+  @Deprecated
   default boolean supportsStreamingTests() {
     return false;
   }
 
+  /**
+   * This shouldn't be overriden as the default implementation is sufficient. Unfortunately it's not
+   * trivial to convert this to an Abstract class and make this final because rules also extend a
+   * variety of AbstractBuildRule classes and multiple inheritance is not available in Java.
+   *
+   * @return the test protocol specs.
+   */
   @Override
   default ExternalTestSpec getExternalTestRunnerSpec(
       ExecutionContext executionContext,
       TestRunningOptions testRunningOptions,
       BuildContext buildContext) {
-    return new ImmutableExternalRunnerTestProtocol(getBuildTarget(), getSpecs());
+    return new ImmutableExternalRunnerTestProtocol(
+        getBuildTarget(), getSpecs(), buildContext.getSourcePathResolver());
   }
 
+  /** since Buck doesn't actually run the test, pre test steps make no sense. */
   @Override
+  @Deprecated
   default void onPreTest(BuildContext buildContext) {}
 
   @Nullable

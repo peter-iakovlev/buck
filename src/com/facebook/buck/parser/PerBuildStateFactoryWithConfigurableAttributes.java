@@ -21,7 +21,6 @@ import com.facebook.buck.core.config.BuckConfig;
 import com.facebook.buck.core.model.impl.MultiPlatformTargetConfigurationTransformer;
 import com.facebook.buck.core.model.targetgraph.TargetNode;
 import com.facebook.buck.core.model.targetgraph.impl.TargetNodeFactory;
-import com.facebook.buck.core.model.targetgraph.raw.RawTargetNode;
 import com.facebook.buck.core.parser.buildtargetparser.UnconfiguredBuildTargetViewFactory;
 import com.facebook.buck.core.resources.ResourcesConfig;
 import com.facebook.buck.core.rules.config.impl.ConfigurationRuleSelectableResolver;
@@ -33,6 +32,7 @@ import com.facebook.buck.core.select.SelectorListResolver;
 import com.facebook.buck.core.select.impl.DefaultSelectorListResolver;
 import com.facebook.buck.core.select.impl.SelectorFactory;
 import com.facebook.buck.core.select.impl.SelectorListFactory;
+import com.facebook.buck.core.select.impl.UnconfiguredSelectorListResolver;
 import com.facebook.buck.event.BuckEventBus;
 import com.facebook.buck.io.watchman.Watchman;
 import com.facebook.buck.log.GlobalStateManager;
@@ -119,7 +119,7 @@ class PerBuildStateFactoryWithConfigurableAttributes extends PerBuildStateFactor
 
     BuildFileRawNodeParsePipeline buildFileRawNodeParsePipeline =
         new BuildFileRawNodeParsePipeline(
-            new PipelineNodeCache<>(daemonicParserState.getRawNodeCache()),
+            new PipelineNodeCache<>(daemonicParserState.getRawNodeCache(), n -> false),
             projectBuildFileParserPool,
             executorService,
             eventBus,
@@ -138,7 +138,8 @@ class PerBuildStateFactoryWithConfigurableAttributes extends PerBuildStateFactor
     RawTargetNodePipeline rawTargetNodePipeline =
         new RawTargetNodePipeline(
             pipelineExecutorService,
-            daemonicParserState.getOrCreateNodeCache(RawTargetNode.class),
+            daemonicParserState.getOrCreateNodeCache(
+                DaemonicParserState.RAW_TARGET_NODE_CACHE_TYPE),
             eventBus,
             buildFileRawNodeParsePipeline,
             buildTargetRawNodeParsePipeline,
@@ -147,13 +148,13 @@ class PerBuildStateFactoryWithConfigurableAttributes extends PerBuildStateFactor
     PackageBoundaryChecker packageBoundaryChecker =
         new ThrowingPackageBoundaryChecker(daemonicParserState.getBuildFileTrees());
 
-    ParserTargetNodeFactory<RawTargetNode> nonResolvingRawTargetNodeToTargetNodeFactory =
+    ParserTargetNodeFromRawTargetNodeFactory nonResolvingRawTargetNodeToTargetNodeFactory =
         new NonResolvingRawTargetNodeToTargetNodeFactory(
-            DefaultParserTargetNodeFactory.createForParser(
+            new DefaultParserTargetNodeFactory(
                 typeCoercerFactory,
                 knownRuleTypesProvider,
                 marshaller,
-                daemonicParserState.getBuildFileTrees(),
+                new ThrowingPackageBoundaryChecker(daemonicParserState.getBuildFileTrees()),
                 symlinkCheckers,
                 targetNodeFactory));
 
@@ -161,15 +162,16 @@ class PerBuildStateFactoryWithConfigurableAttributes extends PerBuildStateFactor
     // deadlocks happening when too many node are requested from targetNodeParsePipeline.
     // That pipeline does blocking calls to get nodes from nonResolvingTargetNodeParsePipeline
     // which can lead to deadlocks.
-    ParsePipeline<TargetNode<?>> nonResolvingTargetNodeParsePipeline =
+    RawTargetNodeToTargetNodeParsePipeline nonResolvingTargetNodeParsePipeline =
         new RawTargetNodeToTargetNodeParsePipeline(
-            daemonicParserState.getOrCreateNodeCacheForConfigurationTargets(TargetNode.class),
+            daemonicParserState.getOrCreateNodeCache(DaemonicParserState.TARGET_NODE_CACHE_TYPE),
             MoreExecutors.newDirectExecutorService(),
             rawTargetNodePipeline,
             eventBus,
             "nonresolving_raw_target_node_parse_pipeline",
             enableSpeculativeParsing,
-            nonResolvingRawTargetNodeToTargetNodeFactory);
+            nonResolvingRawTargetNodeToTargetNodeFactory,
+            unconfiguredBuildTargetFactory);
 
     ConfigurationRuleRegistry configurationRuleRegistry =
         ConfigurationRuleRegistryFactory.createRegistry(
@@ -180,7 +182,12 @@ class PerBuildStateFactoryWithConfigurableAttributes extends PerBuildStateFactor
         new ConfigurationRuleSelectableResolver(
             configurationRuleRegistry.getConfigurationRuleResolver());
 
-    SelectorListResolver selectorListResolver = new DefaultSelectorListResolver(selectableResolver);
+    SelectorListResolver selectorListResolver;
+    if (parsingContext.useUnconfiguredSelectorResolver()) {
+      selectorListResolver = new UnconfiguredSelectorListResolver(selectableResolver);
+    } else {
+      selectorListResolver = new DefaultSelectorListResolver(selectableResolver);
+    }
 
     RawTargetNodeToTargetNodeFactory rawTargetNodeToTargetNodeFactory =
         new RawTargetNodeToTargetNodeFactory(
@@ -200,15 +207,16 @@ class PerBuildStateFactoryWithConfigurableAttributes extends PerBuildStateFactor
         MoreExecutors.listeningDecorator(
             createExecutorService(rootCell.getBuckConfig(), "configured-pipeline"));
 
-    ParsePipeline<TargetNode<?>> targetNodeParsePipeline =
+    RawTargetNodeToTargetNodeParsePipeline targetNodeParsePipeline =
         new RawTargetNodeToTargetNodeParsePipeline(
-            daemonicParserState.getOrCreateNodeCache(TargetNode.class),
+            daemonicParserState.getOrCreateNodeCache(DaemonicParserState.TARGET_NODE_CACHE_TYPE),
             configuredPipelineExecutor,
             rawTargetNodePipeline,
             eventBus,
             "configured_raw_target_node_parse_pipeline",
             enableSpeculativeParsing,
-            rawTargetNodeToTargetNodeFactory) {
+            rawTargetNodeToTargetNodeFactory,
+            unconfiguredBuildTargetFactory) {
           @Override
           public void close() {
             super.close();

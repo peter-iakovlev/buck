@@ -46,8 +46,9 @@ import com.facebook.buck.remoteexecution.interfaces.Protocol.OutputDirectory;
 import com.facebook.buck.remoteexecution.interfaces.Protocol.OutputFile;
 import com.facebook.buck.remoteexecution.proto.WorkerRequirements;
 import com.facebook.buck.rules.modern.ModernBuildRule;
-import com.facebook.buck.rules.modern.impl.NoOpModernBuildRule;
+import com.facebook.buck.rules.modern.NoOpModernBuildRule;
 import com.facebook.buck.testutil.TemporaryPaths;
+import com.facebook.buck.util.types.Unit;
 import com.google.common.base.Charsets;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.Futures;
@@ -101,7 +102,8 @@ public class RemoteExecutionStrategyTest {
         RemoteExecutionActionInfo.of(
             protocol.computeDigest(new byte[] {1}),
             ImmutableList.of(
-                UploadDataSupplier.of(missingDigest, () -> new ByteArrayInputStream(missingData))),
+                UploadDataSupplier.of(
+                    "data", missingDigest, () -> new ByteArrayInputStream(missingData))),
             missingData.length,
             ImmutableList.of());
 
@@ -155,8 +157,8 @@ public class RemoteExecutionStrategyTest {
     clients =
         new SimpleRemoteExecutionClients() {
           @Override
-          public ListenableFuture<Void> addMissing() {
-            SettableFuture<Void> result = SettableFuture.create();
+          public ListenableFuture<Unit> addMissing() {
+            SettableFuture<Unit> result = SettableFuture.create();
             completer.set(() -> result.set(null));
             return result;
           }
@@ -223,8 +225,8 @@ public class RemoteExecutionStrategyTest {
     clients =
         new SimpleRemoteExecutionClients() {
           @Override
-          public ListenableFuture<Void> materializeOutputs() {
-            SettableFuture<Void> result = SettableFuture.create();
+          public ListenableFuture<Unit> materializeOutputs() {
+            SettableFuture<Unit> result = SettableFuture.create();
             completer.set(() -> result.set(null));
             return result;
           }
@@ -346,11 +348,11 @@ public class RemoteExecutionStrategyTest {
       };
     }
 
-    public ListenableFuture<Void> addMissing() {
-      return Futures.immediateFuture(null);
+    public ListenableFuture<Unit> addMissing() {
+      return Futures.immediateFuture(Unit.UNIT);
     }
 
-    public ListenableFuture<Void> materializeOutputs() {
+    public ListenableFuture<Unit> materializeOutputs() {
       return Futures.immediateFuture(null);
     }
 
@@ -368,12 +370,12 @@ public class RemoteExecutionStrategyTest {
     public ContentAddressedStorageClient getContentAddressedStorage() {
       return new ContentAddressedStorageClient() {
         @Override
-        public ListenableFuture<Void> addMissing(Collection<UploadDataSupplier> data) {
+        public ListenableFuture<Unit> addMissing(Collection<UploadDataSupplier> data) {
           return SimpleRemoteExecutionClients.this.addMissing();
         }
 
         @Override
-        public ListenableFuture<Void> materializeOutputs(
+        public ListenableFuture<Unit> materializeOutputs(
             List<OutputDirectory> outputDirectories,
             List<OutputFile> outputFiles,
             FileMaterializer materializer) {

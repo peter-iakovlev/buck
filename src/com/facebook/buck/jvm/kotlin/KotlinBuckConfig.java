@@ -36,7 +36,6 @@ import javax.annotation.Nullable;
 public class KotlinBuckConfig implements ConfigView<BuckConfig> {
 
   private static final Logger LOG = Logger.get(KotlinBuckConfig.class);
-
   private static final String SECTION = "kotlin";
   public static final String PROPERTY_COMPILE_AGAINST_ABIS = "compile_against_abis";
   public static final String PROPERTY_ABI_GENERATION_MODE = "abi_generation_mode";
@@ -59,6 +58,7 @@ public class KotlinBuckConfig implements ConfigView<BuckConfig> {
               delegate.getPathSourcePath(getPathToStdlibJar()),
               delegate.getPathSourcePath(getPathToReflectJar()),
               delegate.getPathSourcePath(getPathToScriptRuntimeJar()),
+              delegate.getPathSourcePath(getPathToAnnotationsJar()),
               delegate.getPathSourcePath(getPathToCompilerJar()));
 
       return new JarBackedReflectedKotlinc(
@@ -72,7 +72,9 @@ public class KotlinBuckConfig implements ConfigView<BuckConfig> {
             getPathToStdlibJar(),
             getPathToReflectJar(),
             getPathToScriptRuntimeJar(),
-            getPathToCompilerJar()));
+            getPathToCompilerJar(),
+            getPathToTrove4jJar(),
+            getPathToAnnotationsJar()));
   }
 
   public boolean shouldCompileAgainstAbis() {
@@ -123,12 +125,7 @@ public class KotlinBuckConfig implements ConfigView<BuckConfig> {
    * @return the Kotlin runtime jar path
    */
   Path getPathToStdlibJar() {
-    try {
-      return getPathToJar("kotlin-stdlib");
-    } catch (HumanReadableException e) {
-      // TODO: Check if kt version < 1.1
-      return getPathToJar("kotlin-runtime");
-    }
+    return getPathToJar("kotlin-stdlib");
   }
 
   /**
@@ -155,16 +152,25 @@ public class KotlinBuckConfig implements ConfigView<BuckConfig> {
    * @return the Kotlin compiler jar path
    */
   Path getPathToCompilerJar() {
-    try {
-      return getPathToJar("kotlin-compiler-embeddable");
-    } catch (HumanReadableException e) {
-      LOG.warn(
-          "kotlin-compiler-embeddable.jar was not found in "
-              + kotlinHome
-              + " directory, this"
-              + " may result in kapt not working properly. Proceeding with kotlin-compiler.jar");
-      return getPathToJar("kotlin-compiler");
-    }
+    return getPathToJar("kotlin-compiler");
+  }
+
+  /**
+   * Get the path to the trove4j jar, which is required by the compiler jar.
+   *
+   * @return the trove4j jar path
+   */
+  Path getPathToTrove4jJar() {
+    return getPathToJar("trove4j");
+  }
+
+  /**
+   * Get the path to the annotations jar, which is required by the compiler jar.
+   *
+   * @return the annotations jar path
+   */
+  Path getPathToAnnotationsJar() {
+    return getPathToJar("annotations");
   }
 
   /**
@@ -173,23 +179,21 @@ public class KotlinBuckConfig implements ConfigView<BuckConfig> {
    * @return the Kotlin annotation processing jar path
    */
   Path getPathToAnnotationProcessingJar() {
+    return getPathToJar("kotlin-annotation-processing");
+  }
+
+  /** @return the path to the Kotlin compiler abi generation plugin jar. */
+  @Nullable
+  Path getPathToAbiGenerationPluginJar() {
     try {
-      return getPathToJar("kotlin-annotation-processing-gradle");
+      return getPathToJar("jvm-abi-gen");
     } catch (HumanReadableException e) {
       LOG.warn(
-          "kotlin-annotation-processing-gradle.jar was not found in "
+          "jvm-abi-gen.jar was not found in "
               + kotlinHome
-              + " directory, searching for kotlin-annotation-processing-maven.jar");
-      try {
-        return getPathToJar("kotlin-annotation-processing-maven");
-      } catch (HumanReadableException er) {
-        LOG.warn(
-            "kotlin-annotation-processing-maven.jar was not found in "
-                + kotlinHome
-                + " directory, this"
-                + " may result in kapt not working properly. Proceeding with kotlin-annotation-processing.jar");
-        return getPathToJar("kotlin-annotation-processing");
-      }
+              + " directory, this"
+              + " means that source ABIs will not be generated.");
+      return null;
     }
   }
 

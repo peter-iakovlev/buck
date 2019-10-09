@@ -494,7 +494,7 @@ public class DistBuildCommandDelegate {
               stampedeId,
               filesystem.resolve(params.getInvocationInfo().get().getLogDirectoryPath()),
               distBuildLogStateTracker.getBuildSlaveLogsMaterializer().getMaterializedRunIds(),
-              DistBuildCommand.class.getSimpleName().toLowerCase());
+              "distbuildcommand");
 
       LOG.info("Created DistBuildPostBuildAnalysis");
       AnalysisResults results = postBuildAnalysis.runAnalysis();
@@ -644,7 +644,8 @@ public class DistBuildCommandDelegate {
             params.getUnconfiguredBuildTargetFactory(),
             params.getTargetConfiguration(),
             params.getTargetConfigurationSerializer(),
-            false);
+            false,
+            true);
     localRuleKeyCalculator.set(builder.getCachingBuildEngine().getRuleKeyCalculator());
     builder.shutdown();
   }

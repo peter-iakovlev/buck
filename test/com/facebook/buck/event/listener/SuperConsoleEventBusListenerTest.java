@@ -116,7 +116,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
-import java.util.TimeZone;
 import java.util.UUID;
 import java.util.concurrent.Phaser;
 import java.util.concurrent.TimeUnit;
@@ -148,8 +147,6 @@ public class SuperConsoleEventBusListenerTest {
   private BuildRuleDurationTracker durationTracker;
   private SuperConsoleConfig emptySuperConsoleConfig =
       new SuperConsoleConfig(FakeBuckConfig.builder().build());
-
-  private final TimeZone timeZone = TimeZone.getTimeZone("UTC");
 
   private String formatCacheStatsLine(boolean running, int artifacts, float size, float ratio) {
     String operationString = running ? "Downloading..." : "Downloaded";
@@ -2317,7 +2314,6 @@ public class SuperConsoleEventBusListenerTest {
                 EnvVariablesProvider.getSystemEnv(), System.getProperties()),
             Locale.US,
             logPath,
-            timeZone,
             0L,
             0L,
             1000L,
@@ -2326,7 +2322,8 @@ public class SuperConsoleEventBusListenerTest {
             false,
             Optional.empty(),
             ImmutableSet.of(),
-            ImmutableList.of());
+            ImmutableList.of(),
+            /* maxConcurrentReExecutions */ 0);
     listener.register(eventBus);
 
     ProjectBuildFileParseEvents.Started parseEventStarted =
@@ -3095,7 +3092,7 @@ public class SuperConsoleEventBusListenerTest {
       compareOutput(listener, fakeRenderer, fullOutput, 5);
 
       lines = ImmutableList.builder();
-      listener.renderLines(fakeRenderer, lines, 4, false);
+      listener.renderLinesWithMaybeCompression(fakeRenderer, lines, 4, false);
       assertThat(
           lines.build(),
           equalTo(
@@ -3107,14 +3104,14 @@ public class SuperConsoleEventBusListenerTest {
       assertThat(fakeRenderer.lastSortWasByTime(), is(true));
 
       lines = ImmutableList.builder();
-      listener.renderLines(fakeRenderer, lines, 2, false);
+      listener.renderLinesWithMaybeCompression(fakeRenderer, lines, 2, false);
       assertThat(
           lines.build(),
           equalTo(ImmutableList.of(" - Status of thread 2", " - 4 MORE THREADS: t1 t4 t8 t5")));
       assertThat(fakeRenderer.lastSortWasByTime(), is(true));
 
       lines = ImmutableList.builder();
-      listener.renderLines(fakeRenderer, lines, 1, false);
+      listener.renderLinesWithMaybeCompression(fakeRenderer, lines, 1, false);
       assertThat(lines.build(), equalTo(ImmutableList.of(" - 5 THREADS: t2 t1 t4 t8 t5")));
       assertThat(fakeRenderer.lastSortWasByTime(), is(true));
     }
@@ -3275,7 +3272,6 @@ public class SuperConsoleEventBusListenerTest {
                 EnvVariablesProvider.getSystemEnv(), System.getProperties()),
             Locale.US,
             logPath,
-            timeZone,
             0L,
             0L,
             1000L,
@@ -3284,7 +3280,8 @@ public class SuperConsoleEventBusListenerTest {
             printBuildId,
             buildDetailsTemplate,
             buildDetailsCommands,
-            ImmutableList.of());
+            ImmutableList.of(),
+            /* maxConcurrentReExecutions */ 0);
     listener.register(eventBus);
     return listener;
   }
@@ -3300,7 +3297,7 @@ public class SuperConsoleEventBusListenerTest {
       int maxLines) {
     ImmutableList.Builder<String> lines;
     lines = ImmutableList.builder();
-    listener.renderLines(fakeRenderer, lines, maxLines, false);
+    listener.renderLinesWithMaybeCompression(fakeRenderer, lines, maxLines, false);
     MoreAsserts.assertIterablesEquals(fullOutput, lines.build());
     assertThat(fakeRenderer.lastSortWasByTime(), is(false));
   }

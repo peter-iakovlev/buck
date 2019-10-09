@@ -31,13 +31,14 @@ import com.facebook.buck.core.rules.actions.ImmutableActionExecutionSuccess;
 import com.facebook.buck.core.rules.analysis.action.ActionAnalysisData;
 import com.facebook.buck.core.rules.analysis.action.ActionAnalysisData.ID;
 import com.facebook.buck.core.rules.analysis.action.ActionAnalysisDataKey;
-import com.facebook.buck.core.rules.providers.ProviderInfoCollection;
-import com.facebook.buck.core.rules.providers.impl.ProviderInfoCollectionImpl;
+import com.facebook.buck.core.rules.providers.collect.ProviderInfoCollection;
+import com.facebook.buck.core.rules.providers.collect.impl.TestProviderInfoCollectionImpl;
 import com.facebook.buck.event.BuckEventBus;
 import com.facebook.buck.event.BuckEventBusForTests;
 import com.facebook.buck.io.filesystem.ProjectFilesystem;
 import com.facebook.buck.io.filesystem.impl.FakeProjectFilesystem;
 import com.google.common.base.VerifyException;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
@@ -65,7 +66,7 @@ public class RuleAnalysisContextImplTest {
     deps =
         ImmutableMap.of(
             BuildTargetFactory.newInstance("//my:foo"),
-            ProviderInfoCollectionImpl.builder().build());
+            TestProviderInfoCollectionImpl.builder().build());
     assertSame(deps, new RuleAnalysisContextImpl(target, deps, fakeFilesystem, eventBus).deps());
   }
 
@@ -170,7 +171,8 @@ public class RuleAnalysisContextImplTest {
         ImmutableSet.of(context.actionRegistry().declareArtifact(Paths.get("output")));
     FakeAction.FakeActionExecuteLambda actionFunction =
         (inputs1, outputs1, ctx) ->
-            ImmutableActionExecutionSuccess.of(Optional.empty(), Optional.empty());
+            ImmutableActionExecutionSuccess.of(
+                Optional.empty(), Optional.empty(), ImmutableList.of());
 
     new FakeAction(context.actionRegistry(), inputs, outputs, actionFunction);
 

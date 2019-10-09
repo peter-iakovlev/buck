@@ -40,8 +40,6 @@ import com.facebook.buck.core.rules.BuildRule;
 import com.facebook.buck.core.rules.transformer.impl.DefaultTargetNodeToBuildRuleTransformer;
 import com.facebook.buck.core.sourcepath.SourcePath;
 import com.facebook.buck.core.sourcepath.resolver.SourcePathResolver;
-import com.facebook.buck.core.util.log.Logger;
-import com.facebook.buck.distributed.DistBuildConfig;
 import com.facebook.buck.event.BuckEventBus;
 import com.facebook.buck.event.BuckEventListener;
 import com.facebook.buck.event.listener.FileSerializationOutputRuleDepsListener;
@@ -100,8 +98,6 @@ import org.kohsuke.args4j.Option;
 
 public class BuildCommand extends AbstractCommand {
 
-  private static final Logger LOG = Logger.get(BuildCommand.class);
-
   private static final String KEEP_GOING_LONG_ARG = "--keep-going";
   private static final String BUILD_REPORT_LONG_ARG = "--build-report";
   private static final String JUST_BUILD_LONG_ARG = "--just-build";
@@ -116,7 +112,6 @@ public class BuildCommand extends AbstractCommand {
   private static final String SHOW_FULL_JSON_OUTPUT_LONG_ARG = "--show-full-json-output";
   private static final String SHOW_RULEKEY_LONG_ARG = "--show-rulekey";
   private static final String LOCAL_BUILD_LONG_ARG = "--local";
-  private static final String DISTRIBUTED_LONG_ARG = "--distributed";
   static final String BUCK_BINARY_STRING_ARG = "--buck-binary";
   private static final String RULEKEY_LOG_PATH_LONG_ARG = "--rulekeys-log-path";
 
@@ -191,23 +186,8 @@ public class BuildCommand extends AbstractCommand {
   @Option(name = SHOW_RULEKEY_LONG_ARG, usage = "Print the rulekey for each of the built rules.")
   private boolean showRuleKey;
 
-  @Option(
-      name = LOCAL_BUILD_LONG_ARG,
-      usage = "Disable distributed build (overrides --distributed).")
-  private boolean forceDisableDistributedBuild = false;
-
-  @Option(
-      name = DISTRIBUTED_LONG_ARG,
-      usage = "Whether to run in distributed build mode. (experimental)",
-      hidden = true)
-  private boolean useDistributedBuild = false; // Must be accessed via the getter method.
-
-  @Nullable
-  @Option(
-      name = DistBuildRunCommand.BUILD_STATE_FILE_ARG_NAME,
-      usage = DistBuildRunCommand.BUILD_STATE_FILE_ARG_USAGE,
-      hidden = true)
-  private String distributedBuildStateFile = null;
+  @Option(name = LOCAL_BUILD_LONG_ARG, usage = "Disable distributed build.")
+  private boolean forceDisableRemoteExecution = false;
 
   @Nullable
   @Option(
@@ -228,8 +208,6 @@ public class BuildCommand extends AbstractCommand {
   private boolean outputRuleDeps = false;
 
   @Argument private List<String> arguments = new ArrayList<>();
-
-  @Nullable private DistBuildCommandDelegate distBuildCommandDelegate;
 
   public List<String> getArguments() {
     return arguments;
@@ -277,52 +255,12 @@ public class BuildCommand extends AbstractCommand {
     this.keepGoing = keepGoing;
   }
 
-  public void forceDisableDistributedBuild() {
-    forceDisableDistributedBuild = true;
+  public void forceDisableRemoteExecution() {
+    forceDisableRemoteExecution = true;
   }
 
-  /** Whether this build is using stampede or not. */
-  public boolean isUsingDistributedBuild() {
-    if (forceDisableDistributedBuild) {
-      useDistributedBuild = false;
-    }
-
-    return useDistributedBuild;
-  }
-
-  @Nullable
-  public DistBuildCommandDelegate getDistBuildCommandDelegate() {
-    if (isUsingDistributedBuild()) {
-      if (distBuildCommandDelegate == null) {
-        distBuildCommandDelegate =
-            new DistBuildCommandDelegate(
-                distributedBuildStateFile, buckBinary, localRuleKeyCalculator, keepGoing);
-      }
-      return distBuildCommandDelegate;
-    }
-    return null;
-  }
-
-  /**
-   * Mark this build as being automatically converted to stampede.
-   *
-   * @param config to retrieve the message (if any) to be shown to the user.
-   * @return true if the build was converted to stampede.
-   */
-  public boolean tryConvertingToStampede(DistBuildConfig config) {
-    if (forceDisableDistributedBuild) {
-      LOG.info(
-          "Distributed build was forcefully disabled. Will not auto-convert build to stampede.");
-
-      useDistributedBuild = false; // Make sure
-      return false;
-    }
-
-    useDistributedBuild = true;
-
-    Objects.requireNonNull(getDistBuildCommandDelegate()).tryConvertingToStampede(config);
-
-    return true;
+  public boolean isRemoteExecutionForceDisabled() {
+    return forceDisableRemoteExecution;
   }
 
   /** @return an absolute path or {@link Optional#empty()}. */
@@ -469,10 +407,6 @@ public class BuildCommand extends AbstractCommand {
 
   private void checkSingleBuildTargetSpecifiedForOutBuildMode(
       TargetGraphCreationResult targetGraphAndBuildTargets) {
-    // Ideally, we would error out of this before we build the entire graph, but it is possible
-    // that `getArguments().size()` is 1 but `targetGraphAndBuildTargets.getBuildTargets().size()`
-    // is greater than 1 if the lone argument is a wildcard build target that ends in "...".
-    // As such, we have to get the result of createTargetGraph() before we can do this check.
     if (outputPathForSingleBuildTarget != null
         && targetGraphAndBuildTargets.getBuildTargets().size() != 1) {
       throw new CommandLineException(
@@ -489,44 +423,39 @@ public class BuildCommand extends AbstractCommand {
       throws Exception {
     ExitCode exitCode;
     GraphsAndBuildTargets graphsAndBuildTargets;
-    if (isUsingDistributedBuild()) {
-      return Objects.requireNonNull(getDistBuildCommandDelegate())
-          .executeBuildAndProcessResult(params, commandThreadManager, this);
-    } else {
-      try (ThriftRuleKeyLogger ruleKeyLogger = createRuleKeyLogger().orElse(null)) {
-        Optional<ThriftRuleKeyLogger> optionalRuleKeyLogger = Optional.ofNullable(ruleKeyLogger);
-        graphsAndBuildTargets =
-            createGraphsAndTargets(
+    try (ThriftRuleKeyLogger ruleKeyLogger = createRuleKeyLogger().orElse(null)) {
+      Optional<ThriftRuleKeyLogger> optionalRuleKeyLogger = Optional.ofNullable(ruleKeyLogger);
+      graphsAndBuildTargets =
+          createGraphsAndTargets(
+              params,
+              commandThreadManager.getListeningExecutorService(),
+              targetNodeSpecEnhancer,
+              optionalRuleKeyLogger);
+
+      if (outputRuleDeps) {
+        ActionGraphBuilder actionGraphBuilder =
+            graphsAndBuildTargets.getGraphs().getActionGraphAndBuilder().getActionGraphBuilder();
+        ImmutableSet<BuildTarget> buildTargets = graphsAndBuildTargets.getBuildTargets();
+        Path outputPath = getLogDirectoryPath(params).resolve(ACTION_GRAPH_FILE_NAME);
+        new ActionGraphSerializer(actionGraphBuilder, buildTargets, outputPath).serialize();
+      }
+
+      try (RuleKeyCacheScope<RuleKey> ruleKeyCacheScope =
+          getDefaultRuleKeyCacheScope(
+              params, graphsAndBuildTargets.getGraphs().getActionGraphAndBuilder())) {
+        exitCode =
+            executeLocalBuild(
                 params,
-                commandThreadManager.getListeningExecutorService(),
-                targetNodeSpecEnhancer,
-                optionalRuleKeyLogger);
-
-        if (outputRuleDeps) {
-          ActionGraphBuilder actionGraphBuilder =
-              graphsAndBuildTargets.getGraphs().getActionGraphAndBuilder().getActionGraphBuilder();
-          ImmutableSet<BuildTarget> buildTargets = graphsAndBuildTargets.getBuildTargets();
-          Path outputPath = getLogDirectoryPath(params).resolve(ACTION_GRAPH_FILE_NAME);
-          new ActionGraphSerializer(actionGraphBuilder, buildTargets, outputPath).serialize();
-        }
-
-        try (RuleKeyCacheScope<RuleKey> ruleKeyCacheScope =
-            getDefaultRuleKeyCacheScope(
-                params, graphsAndBuildTargets.getGraphs().getActionGraphAndBuilder())) {
-          exitCode =
-              executeLocalBuild(
-                  params,
-                  graphsAndBuildTargets,
-                  commandThreadManager.getWeightedListeningExecutorService(),
-                  optionalRuleKeyLogger,
-                  new NoOpRemoteBuildRuleCompletionWaiter(),
-                  false,
-                  Optional.empty(),
-                  ruleKeyCacheScope,
-                  lastBuild);
-          if (exitCode == ExitCode.SUCCESS) {
-            exitCode = processSuccessfulBuild(params, graphsAndBuildTargets, ruleKeyCacheScope);
-          }
+                graphsAndBuildTargets,
+                commandThreadManager.getWeightedListeningExecutorService(),
+                optionalRuleKeyLogger,
+                new NoOpRemoteBuildRuleCompletionWaiter(),
+                false,
+                Optional.empty(),
+                ruleKeyCacheScope,
+                lastBuild);
+        if (exitCode == ExitCode.SUCCESS) {
+          exitCode = processSuccessfulBuild(params, graphsAndBuildTargets, ruleKeyCacheScope);
         }
       }
     }
@@ -609,7 +538,17 @@ public class BuildCommand extends AbstractCommand {
             pathResolver, rule, buckConfig.getView(BuildBuckConfig.class).getBuckOutCompatLink());
     if (outputPath.isPresent()) {
       Path absolutePath = outputPath.get();
-      Path destPath = lastOutputDirPath.relativize(absolutePath);
+      Path destPath;
+      try {
+        destPath = lastOutputDirPath.relativize(absolutePath);
+      } catch (IllegalArgumentException e) {
+        // Troubleshooting a potential issue with windows relativizing things
+        String msg =
+            String.format(
+                "Could not relativize %s to %s: %s",
+                absolutePath, lastOutputDirPath, e.getMessage());
+        throw new IllegalArgumentException(msg, e);
+      }
       Path linkPath = lastOutputDirPath.resolve(absolutePath.getFileName());
       // Don't overwrite existing symlink in case there are duplicate names.
       if (!Files.exists(linkPath, LinkOption.NOFOLLOW_LINKS)) {
@@ -798,7 +737,7 @@ public class BuildCommand extends AbstractCommand {
             new LocalCachingBuildEngineDelegate(params.getFileHashCache()),
             executor,
             isKeepGoing(),
-            isUsingDistributedBuild(),
+            false,
             isDownloadHeavyBuild,
             ruleKeyCacheScope,
             getBuildEngineMode(),
@@ -808,7 +747,8 @@ public class BuildCommand extends AbstractCommand {
             params.getUnconfiguredBuildTargetFactory(),
             params.getTargetConfiguration(),
             params.getTargetConfigurationSerializer(),
-            remoteExecutionAutoEnabled);
+            remoteExecutionAutoEnabled,
+            isRemoteExecutionForceDisabled());
     // TODO(buck_team): use try-with-resources instead
     try {
       buildReference.set(builder.getBuild());
@@ -876,11 +816,7 @@ public class BuildCommand extends AbstractCommand {
   public Iterable<BuckEventListener> getEventListeners(
       Map<ExecutorPool, ListeningExecutorService> executorPool,
       ScheduledExecutorService scheduledExecutorService) {
-    if (isUsingDistributedBuild()) {
-      return Objects.requireNonNull(getDistBuildCommandDelegate()).getEventListeners();
-    } else {
-      return ImmutableList.of();
-    }
+    return ImmutableList.of();
   }
 
   public static class ActionGraphCreationException extends Exception {

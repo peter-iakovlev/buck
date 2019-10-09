@@ -16,6 +16,7 @@
 package com.facebook.buck.core.rules.providers.lib;
 
 import com.facebook.buck.core.artifact.Artifact;
+import com.facebook.buck.core.rules.providers.ProviderInfo;
 import com.facebook.buck.core.rules.providers.annotations.ImmutableInfo;
 import com.facebook.buck.core.rules.providers.impl.BuiltInProvider;
 import com.facebook.buck.core.rules.providers.impl.BuiltInProviderInfo;
@@ -23,10 +24,11 @@ import com.google.devtools.build.lib.syntax.SkylarkDict;
 import java.util.Set;
 
 /**
- * The standard default information that all rules should be propagating via {@link
- * com.facebook.buck.core.rules.providers.ProviderInfo}.
+ * The standard default information that all rules should be propagating via {@link ProviderInfo}.
  */
-@ImmutableInfo(args = {"named_outputs", "default_outputs"})
+@ImmutableInfo(
+    args = {"named_outputs", "default_outputs"},
+    defaultSkylarkValues = {"{}", "[]"})
 public abstract class DefaultInfo extends BuiltInProviderInfo<DefaultInfo> {
 
   public static final BuiltInProvider<DefaultInfo> PROVIDER =

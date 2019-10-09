@@ -38,8 +38,8 @@ import com.facebook.buck.core.rules.DescriptionWithTargetGraph;
 import com.facebook.buck.core.rules.common.BuildableSupport;
 import com.facebook.buck.core.rules.impl.NoopBuildRuleWithDeclaredAndExtraDeps;
 import com.facebook.buck.core.sourcepath.SourcePath;
-import com.facebook.buck.core.sourcepath.resolver.impl.DefaultSourcePathResolver;
-import com.facebook.buck.core.test.rule.HasTestRunnerLibrary;
+import com.facebook.buck.core.test.rule.HasTestRunner;
+import com.facebook.buck.core.test.rule.coercer.TestRunnerSpecCoercer;
 import com.facebook.buck.core.toolchain.ToolchainProvider;
 import com.facebook.buck.core.toolchain.tool.Tool;
 import com.facebook.buck.core.util.immutables.BuckStyleImmutable;
@@ -257,58 +257,85 @@ public class GoTestDescription
           platform);
     }
 
+    Path packageName = getGoPackageName(graphBuilder, buildTarget, args);
+
+    params = params.copyAppendingExtraDeps(extraDeps.build());
+
     GoBinary testMain;
+    GoTestMain generatedTestMain;
     if (args.getSpecs().isPresent()) {
       UserVerify.checkArgument(
-          args.getRunnerLibrary().isPresent(),
-          "runner_library should be specified for rules implementing test protocol");
+          args.getRunner().isPresent(),
+          "runner should be specified for rules implementing test protocol");
 
-      BuildRule library = graphBuilder.requireRule(args.getRunnerLibrary().get());
+      BuildRule runner = graphBuilder.requireRule(args.getRunner().get());
       UserVerify.verify(
-          library instanceof GoLibrary, "runner_library should be a go_library for go_test");
-      GoLibrary runnerLibrary = (GoLibrary) library;
+          runner instanceof GoTestRunner, "runner should be a go_test_runner for go_test");
+      GoTestRunner testRunner = (GoTestRunner) runner;
 
-      BuildRule testLibrary =
-          new GoLibrary(
-              buildTarget.withAppendedFlavors(TEST_LIBRARY_FLAVOR),
-              projectFilesystem,
-              params,
-              srcs.build());
-      graphBuilder.addToIndex(testLibrary);
+      BuildRuleParams generatorParams = params.withoutDeclaredDeps().withoutExtraDeps();
+      GoBinary testMainGeneratorRule =
+          (GoBinary)
+              graphBuilder.computeIfAbsent(
+                  buildTarget.withFlavors(InternalFlavor.of("make-test-main-gen")),
+                  target ->
+                      GoDescriptors.createGoBinaryRule(
+                          target,
+                          projectFilesystem,
+                          generatorParams,
+                          graphBuilder,
+                          goBuckConfig,
+                          Linker.LinkableDepType.STATIC_PIC,
+                          Optional.empty(),
+                          ImmutableSet.of(testRunner.getTestRunnerGenerator()),
+                          ImmutableSortedSet.of(),
+                          ImmutableList.of(),
+                          ImmutableList.of(),
+                          ImmutableList.of(),
+                          ImmutableList.of(),
+                          platform));
 
-      // TODO(bobyf): this doesn't quite work the way we want since the runner code has hard coded
-      // imports based on the test itself. We need some code gen/template like the existing gotest
-      testMain =
-          GoDescriptors.createGoBinaryRule(
-              buildTarget.withAppendedFlavors(InternalFlavor.of("test-main")),
+      Tool testMainGenerator = testMainGeneratorRule.getExecutableCommand();
+
+      generatedTestMain =
+          new GoTestMain(
+              buildTarget.withAppendedFlavors(InternalFlavor.of("test-main-src")),
               projectFilesystem,
-              params
-                  .copyAppendingExtraDeps(extraDeps.add(runnerLibrary).build())
-                  .withDeclaredDeps(ImmutableSortedSet.of(testLibrary)),
-              graphBuilder,
-              goBuckConfig,
-              args.getLinkStyle().orElse(Linker.LinkableDepType.STATIC_PIC),
-              args.getLinkMode(),
-              runnerLibrary.getSrcs(),
-              args.getResources(),
-              args.getCompilerFlags(),
-              args.getAssemblerFlags(),
-              args.getLinkerFlags(),
-              args.getExternalLinkerFlags(),
-              platform);
+              params.withDeclaredDeps(
+                  ImmutableSortedSet.<BuildRule>naturalOrder()
+                      .addAll(BuildableSupport.getDepsCollection(testMainGenerator, graphBuilder))
+                      .build()),
+              testMainGenerator,
+              srcs.build(),
+              packageName,
+              platform,
+              ImmutableMap.of(packageName, coverVariables),
+              coverageMode);
+      graphBuilder.addToIndex(generatedTestMain);
     } else {
-      testMain =
-          createTestMainRule(
+      generatedTestMain =
+          requireTestMainGenRule(
               buildTarget,
               projectFilesystem,
-              params.copyAppendingExtraDeps(extraDeps.build()),
+              params,
               graphBuilder,
+              platform,
               srcs.build(),
-              coverVariables,
+              ImmutableMap.of(packageName, coverVariables),
               coverageMode,
-              args,
-              platform);
+              packageName);
     }
+
+    testMain =
+        createTestMainRule(
+            buildTarget,
+            projectFilesystem,
+            params,
+            graphBuilder,
+            args,
+            platform,
+            generatedTestMain);
+
     graphBuilder.addToIndex(testMain);
 
     StringWithMacrosConverter macrosConverter =
@@ -323,13 +350,11 @@ public class GoTestDescription
       return new GoTestX(
           buildTarget,
           projectFilesystem,
-          DefaultSourcePathResolver.from(graphBuilder),
           params.withDeclaredDeps(ImmutableSortedSet.of(testMain)).withoutExtraDeps(),
           testMain,
           args.getLabels(),
           args.getContacts(),
-          ImmutableMap.copyOf(
-              Maps.transformValues(args.getSpecs().get(), macrosConverter::convert)),
+          TestRunnerSpecCoercer.coerce(args.getSpecs().get(), macrosConverter),
           args.getResources());
     }
     return new GoTest(
@@ -357,12 +382,9 @@ public class GoTestDescription
       ProjectFilesystem projectFilesystem,
       BuildRuleParams params,
       ActionGraphBuilder graphBuilder,
-      ImmutableSet<SourcePath> srcs,
-      ImmutableMap<String, Path> coverVariables,
-      GoTestCoverStep.Mode coverageMode,
       GoTestDescriptionArg args,
-      GoPlatform platform) {
-    Path packageName = getGoPackageName(graphBuilder, buildTarget, args);
+      GoPlatform platform,
+      GoTestMain generatedTestMain) {
     boolean createResourcesSymlinkTree =
         goBuckConfig
             .getDelegate()
@@ -374,18 +396,6 @@ public class GoTestDescription
         new NoopBuildRuleWithDeclaredAndExtraDeps(
             buildTarget.withAppendedFlavors(TEST_LIBRARY_FLAVOR), projectFilesystem, params);
     graphBuilder.addToIndex(testLibrary);
-
-    BuildRule generatedTestMain =
-        requireTestMainGenRule(
-            buildTarget,
-            projectFilesystem,
-            params,
-            graphBuilder,
-            platform,
-            srcs,
-            ImmutableMap.of(packageName, coverVariables),
-            coverageMode,
-            packageName);
 
     GoBinary testMain =
         GoDescriptors.createGoBinaryRule(
@@ -552,7 +562,7 @@ public class GoTestDescription
           HasContacts,
           HasDeclaredDeps,
           HasSrcs,
-          HasTestRunnerLibrary,
+          HasTestRunner,
           HasTestTimeout,
           HasGoLinkable {
     Optional<BuildTarget> getLibrary();

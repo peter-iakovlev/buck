@@ -17,12 +17,10 @@
 package com.facebook.buck.multitenant.service
 
 import com.facebook.buck.core.model.UnconfiguredBuildTarget
-import com.facebook.buck.core.model.targetgraph.raw.RawTargetNode
 import com.facebook.buck.multitenant.fs.FsAgnosticPath
 import java.util.Objects
 
 typealias Commit = String
-typealias Generation = Int
 
 internal typealias BuildTargetId = Int
 
@@ -36,7 +34,10 @@ internal typealias BuildTargetSet = IntArray
  * This is a RawTargetNode paired with its deps as determined by configuring the RawTargetNode with
  * the empty configuration.
  */
-data class RawBuildRule(val targetNode: RawTargetNode, val deps: Set<UnconfiguredBuildTarget>)
+data class RawBuildRule(
+    val targetNode: ServiceRawTargetNode,
+    val deps: Set<UnconfiguredBuildTarget>
+)
 
 /**
  * Represents an error happened during parsing a package
@@ -46,7 +47,10 @@ data class BuildPackageParsingError(val message: String, val stacktrace: List<St
 /**
  * @param[deps] must be sorted in ascending order!!!
  */
-internal data class InternalRawBuildRule(val targetNode: RawTargetNode, val deps: BuildTargetSet) {
+internal data class InternalRawBuildRule(
+    val targetNode: ServiceRawTargetNode,
+    val deps: BuildTargetSet
+) {
     /*
      * Because RawTargetNodeAndDeps contains an IntArray field, which does not play well with
      * `.equals()` (or `hashCode()`, for that matter), we have to do a bit of work to implement
@@ -80,9 +84,13 @@ private fun hashCodeBuildTargetSet(set: BuildTargetSet): Int {
 data class BuildPackage(
     val buildFileDirectory: FsAgnosticPath,
     val rules: Set<RawBuildRule>,
-    val errors: List<BuildPackageParsingError> = emptyList())
+    val errors: List<BuildPackageParsingError> = emptyList()
+)
 
-internal data class InternalBuildPackage(val buildFileDirectory: FsAgnosticPath, val rules: Set<InternalRawBuildRule>)
+internal data class InternalBuildPackage(
+    val buildFileDirectory: FsAgnosticPath,
+    val rules: Set<InternalRawBuildRule>
+)
 
 /**
  * By construction, the Path for each BuildPackage should be distinct across all of the
@@ -91,7 +99,8 @@ internal data class InternalBuildPackage(val buildFileDirectory: FsAgnosticPath,
 data class BuildPackageChanges(
     val addedBuildPackages: List<BuildPackage> = emptyList(),
     val modifiedBuildPackages: List<BuildPackage> = emptyList(),
-    val removedBuildPackages: List<FsAgnosticPath> = emptyList()) {
+    val removedBuildPackages: List<FsAgnosticPath> = emptyList()
+) {
     fun isEmpty(): Boolean = addedBuildPackages.isEmpty() && modifiedBuildPackages.isEmpty() && removedBuildPackages.isEmpty()
 }
 
@@ -99,4 +108,19 @@ internal data class InternalChanges(
     val addedBuildPackages: List<InternalBuildPackage>,
     val modifiedBuildPackages: List<InternalBuildPackage>,
     val removedBuildPackages: List<FsAgnosticPath>
+)
+
+/**
+ * Metadata for the commit loaded into index
+ */
+data class CommitData(
+    /**
+     * Hash of the commit
+     */
+    val commit: Commit,
+
+    /**
+     * Timestamp, in milliseconds since Unix epoch, when commit was loaded into an index
+     */
+    val timestampLoadedMillies: Long
 )

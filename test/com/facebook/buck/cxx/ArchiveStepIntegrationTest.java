@@ -29,7 +29,6 @@ import com.facebook.buck.cxx.config.CxxBuckConfig;
 import com.facebook.buck.cxx.toolchain.Archiver;
 import com.facebook.buck.cxx.toolchain.CxxPlatform;
 import com.facebook.buck.cxx.toolchain.CxxPlatformUtils;
-import com.facebook.buck.cxx.toolchain.objectfile.ObjectFileCommonModificationDate;
 import com.facebook.buck.cxx.toolchain.objectfile.ObjectFileScrubbers;
 import com.facebook.buck.io.filesystem.ProjectFilesystem;
 import com.facebook.buck.io.filesystem.TestProjectFilesystems;
@@ -37,6 +36,7 @@ import com.facebook.buck.step.TestExecutionContext;
 import com.facebook.buck.step.fs.FileScrubberStep;
 import com.facebook.buck.testutil.TemporaryPaths;
 import com.facebook.buck.testutil.TestConsole;
+import com.facebook.buck.util.ObjectFileCommonModificationDate;
 import com.facebook.buck.util.environment.Platform;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -73,13 +73,15 @@ public class ArchiveStepIntegrationTest {
     Path input = filesystem.getPath("input.dat");
     filesystem.writeContentsToPath("blah", input);
     Preconditions.checkState(filesystem.resolve(input).toFile().setExecutable(true));
+    ImmutableList<String> archiverCmd =
+        archiver.getCommandPrefix(ruleResolver.getSourcePathResolver());
 
     // Build an archive step.
     ArchiveStep archiveStep =
         new ArchiveStep(
             filesystem,
             archiver.getEnvironment(ruleResolver.getSourcePathResolver()),
-            archiver.getCommandPrefix(ruleResolver.getSourcePathResolver()),
+            archiverCmd,
             ImmutableList.of(),
             getArchiveOptions(false),
             output,
@@ -108,6 +110,10 @@ public class ArchiveStepIntegrationTest {
       assertEquals(0, entry.getGroupId());
       assertEquals(String.format("0%o", entry.getMode()), 0100644, entry.getMode());
     }
+
+    // test the beginning of description to make sure it matches the archive command
+    String desc = archiveStep.getDescription(executionContext);
+    assertThat(desc, Matchers.startsWith(archiverCmd.get(0)));
   }
 
   @Test

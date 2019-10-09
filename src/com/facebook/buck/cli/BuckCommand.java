@@ -36,7 +36,6 @@ public class BuckCommand extends AbstractContainerCommand {
     // TODO(nga): rename to `cache delete`
     @SubCommand(name = "cachedelete", impl = CacheDeleteCommand.class),
     @SubCommand(name = "clean", impl = CleanCommand.class),
-    @SubCommand(name = "distbuild", impl = DistBuildCommand.class),
     @SubCommand(name = "doctor", impl = DoctorCommand.class),
     @SubCommand(name = "fetch", impl = FetchCommand.class),
     @SubCommand(name = "fix", impl = FixCommand.class),
@@ -55,6 +54,7 @@ public class BuckCommand extends AbstractContainerCommand {
     @SubCommand(name = "targets", impl = TargetsCommand.class),
     @SubCommand(name = "test", impl = TestCommand.class),
     @SubCommand(name = "uninstall", impl = UninstallCommand.class),
+    @SubCommand(name = "uquery", impl = UnconfiguredQueryCommand.class),
     @SubCommand(name = "verify-caches", impl = VerifyCachesCommand.class),
   })
   @Nullable

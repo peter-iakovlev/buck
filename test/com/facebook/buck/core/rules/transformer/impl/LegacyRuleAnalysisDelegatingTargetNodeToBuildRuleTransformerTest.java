@@ -25,6 +25,7 @@ import static org.junit.Assert.fail;
 import com.facebook.buck.core.artifact.Artifact;
 import com.facebook.buck.core.cell.TestCellPathResolver;
 import com.facebook.buck.core.description.RuleDescription;
+import com.facebook.buck.core.description.arg.ConstructorArg;
 import com.facebook.buck.core.model.BuildTarget;
 import com.facebook.buck.core.model.BuildTargetFactory;
 import com.facebook.buck.core.model.impl.BuildPaths;
@@ -50,8 +51,8 @@ import com.facebook.buck.core.rules.config.registry.impl.ConfigurationRuleRegist
 import com.facebook.buck.core.rules.impl.FakeBuildRule;
 import com.facebook.buck.core.rules.impl.NoopBuildRule;
 import com.facebook.buck.core.rules.impl.RuleAnalysisLegacyBuildRuleView;
-import com.facebook.buck.core.rules.providers.ProviderInfoCollection;
-import com.facebook.buck.core.rules.providers.impl.ProviderInfoCollectionImpl;
+import com.facebook.buck.core.rules.providers.collect.ProviderInfoCollection;
+import com.facebook.buck.core.rules.providers.collect.impl.TestProviderInfoCollectionImpl;
 import com.facebook.buck.core.rules.resolver.impl.TestActionGraphBuilder;
 import com.facebook.buck.core.rules.transformer.TargetNodeToBuildRuleTransformer;
 import com.facebook.buck.core.sourcepath.ExplicitBuildTargetSourcePath;
@@ -60,6 +61,7 @@ import com.facebook.buck.core.toolchain.impl.ToolchainProviderBuilder;
 import com.facebook.buck.io.filesystem.ProjectFilesystem;
 import com.facebook.buck.io.filesystem.impl.FakeProjectFilesystem;
 import com.facebook.buck.rules.coercer.DefaultTypeCoercerFactory;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
@@ -95,12 +97,13 @@ public class LegacyRuleAnalysisDelegatingTargetNodeToBuildRuleTransformerTest {
     TargetNodeToBuildRuleTransformer delegate =
         new TargetNodeToBuildRuleTransformer() {
           @Override
-          public <T> BuildRule transform(
+          public <T extends ConstructorArg> BuildRule transform(
               ToolchainProvider tool,
               TargetGraph targetGraph,
               ConfigurationRuleRegistry configurationRuleRegistry,
               ActionGraphBuilder graphBuilder,
-              TargetNode<T> node) {
+              TargetNode<T> node,
+              ProviderInfoCollection providerInfoCollection) {
             assertSame(targetNode, node);
             return rule;
           }
@@ -128,11 +131,11 @@ public class LegacyRuleAnalysisDelegatingTargetNodeToBuildRuleTransformerTest {
     ProjectFilesystem projectFilesystem = new FakeProjectFilesystem();
 
     RuleDescription<?> description =
-        new RuleDescription() {
+        new RuleDescription<FakeTargetNodeArg>() {
           @Override
           public ProviderInfoCollection ruleImpl(
-              RuleAnalysisContext context, BuildTarget target, Object args) {
-            return ProviderInfoCollectionImpl.builder().build();
+              RuleAnalysisContext context, BuildTarget target, FakeTargetNodeArg args) {
+            return TestProviderInfoCollectionImpl.builder().build();
           }
 
           @Override
@@ -169,7 +172,9 @@ public class LegacyRuleAnalysisDelegatingTargetNodeToBuildRuleTransformerTest {
         actionRegistry,
         ImmutableSet.of(),
         ImmutableSet.of(artifact),
-        (ins, outs, ctx) -> ImmutableActionExecutionSuccess.of(Optional.empty(), Optional.empty()));
+        (ins, outs, ctx) ->
+            ImmutableActionExecutionSuccess.of(
+                Optional.empty(), Optional.empty(), ImmutableList.of()));
 
     AtomicBoolean ruleAnalysisCalled = new AtomicBoolean();
     RuleAnalysisGraph ruleAnalysisComputation =
@@ -179,7 +184,7 @@ public class LegacyRuleAnalysisDelegatingTargetNodeToBuildRuleTransformerTest {
               assertSame(target, ruleAnalysisKey.getBuildTarget());
               return ImmutableFakeRuleAnalysisResultImpl.of(
                   target,
-                  ProviderInfoCollectionImpl.builder().build(),
+                  TestProviderInfoCollectionImpl.builder().build(),
                   fakeActionAnalysisRegistry.getRegistered().entrySet().stream()
                       .collect(
                           ImmutableMap.toImmutableMap(
@@ -189,12 +194,13 @@ public class LegacyRuleAnalysisDelegatingTargetNodeToBuildRuleTransformerTest {
     TargetNodeToBuildRuleTransformer delegate =
         new TargetNodeToBuildRuleTransformer() {
           @Override
-          public <T> BuildRule transform(
+          public <T extends ConstructorArg> BuildRule transform(
               ToolchainProvider tool,
               TargetGraph targetGraph,
               ConfigurationRuleRegistry configurationRuleRegistry,
               ActionGraphBuilder graphBuilder,
-              TargetNode<T> node) {
+              TargetNode<T> node,
+              ProviderInfoCollection providerInfoCollection) {
             fail();
             return null;
           }
@@ -230,11 +236,11 @@ public class LegacyRuleAnalysisDelegatingTargetNodeToBuildRuleTransformerTest {
     ProjectFilesystem projectFilesystem = new FakeProjectFilesystem();
 
     RuleDescription<?> description =
-        new RuleDescription() {
+        new RuleDescription<FakeTargetNodeArg>() {
           @Override
           public ProviderInfoCollection ruleImpl(
-              RuleAnalysisContext context, BuildTarget target, Object args) {
-            return ProviderInfoCollectionImpl.builder().build();
+              RuleAnalysisContext context, BuildTarget target, FakeTargetNodeArg args) {
+            return TestProviderInfoCollectionImpl.builder().build();
           }
 
           @Override
@@ -266,18 +272,19 @@ public class LegacyRuleAnalysisDelegatingTargetNodeToBuildRuleTransformerTest {
               ruleAnalysisCalled.set(true);
               assertSame(target, ruleAnalysisKey.getBuildTarget());
               return ImmutableFakeRuleAnalysisResultImpl.of(
-                  target, ProviderInfoCollectionImpl.builder().build(), ImmutableMap.of());
+                  target, TestProviderInfoCollectionImpl.builder().build(), ImmutableMap.of());
             });
 
     TargetNodeToBuildRuleTransformer delegate =
         new TargetNodeToBuildRuleTransformer() {
           @Override
-          public <T> BuildRule transform(
+          public <T extends ConstructorArg> BuildRule transform(
               ToolchainProvider tool,
               TargetGraph targetGraph,
               ConfigurationRuleRegistry configurationRuleRegistry,
               ActionGraphBuilder graphBuilder,
-              TargetNode<T> node) {
+              TargetNode<T> node,
+              ProviderInfoCollection providerInfoCollection) {
             fail();
             return null;
           }
